@@ -1,12 +1,14 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE KindSignatures #-}
-{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE ConstraintKinds #-}
-{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE ExistentialQuantification #-}
 
 module DataflowSafety where
@@ -163,9 +165,14 @@ data IxList :: b -> (a -> b -> b) -> (a -> Type) -> b -> Type where
   INil ::                                                IxList e f c e
   (:>) :: IxListConstraint a => c a -> IxList e f c b -> IxList e f c (f a b)
 
+class Trivial a
+
+instance Trivial a
+
 type family IxListConstraint (a :: k) :: Constraint where
   IxListConstraint (sym :: Symbol)        = KnownSymbol sym
   IxListConstraint ('(term, sym) :: Term) = KnownSymbol sym
+  IxListConstraint a                      = Trivial a
 
 append :: IxList '[] (:) c m
        -> IxList '[] (:) c n
@@ -232,12 +239,13 @@ decWellModedness modedAtomVars body =
       Refl <- decEmpty modedAtomVars
       pure Basic
     SnocBody{} -> decAllElem modedAtomVars (vars body)
+
 --------------------------------------------------------------------------------
 -- Lemmas
 --------------------------------------------------------------------------------
 
 lemEmptyRight :: IxList '[] (:) p xs -> xs :++: '[] :~: xs
-lemEmptyRight INil                            = Refl
+lemEmptyRight INil                                 = Refl
 lemEmptyRight (x :> xs) | Refl <- lemEmptyRight xs = Refl
 
 --------------------------------------------------------------------------------
