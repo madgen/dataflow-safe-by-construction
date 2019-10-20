@@ -284,15 +284,16 @@ tests =
   [ ((someEasy, [ someEasy ]) , True)
   , ((someEasy, [ someModedP ]), False)
   , ((someEasy, [ someGroundP ]), True)
-  , ((someEasy, [ ]), True)
-  , ((someModedP, [ ]), False)
-  , ((someModedP, [ someEasy, someModedP ]), True)
-  , ((someModedP, [ someModedP, someEasy ]), False)
-  , ((someModedP, [ someEasy, someGroundP, someModedP ]), True)
+  , ((someEasy, [ ]), False)
+  , ((someEasy, [ ]), False)
+  , ((someEasy, [ someEasy, someModedP ]), True)
+  , ((someEasy, [ someModedP, someEasy ]), False)
+  , ((someEasy, [ someEasy, someGroundP, someModedP ]), True)
   ]
 
+main :: IO ()
 main =
-  forM_ (zip [1..] tests) $ \(ix, (testCase, expectation)) ->
-    if isJust (uncurry mkClause testCase) == expectation
+  forM_ (zip tests [1..]) $ \((testCase, expectation), ix) ->
+    putStrLn $ if isJust (uncurry mkClause testCase) == expectation
       then "Test passed."
       else "Test #" <> show ix <> " failed."
