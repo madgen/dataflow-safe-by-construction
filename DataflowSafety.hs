@@ -11,7 +11,10 @@
 
 module DataflowSafety where
 
+import Control.Monad (forM_)
+
 import Data.Kind
+import Data.Maybe (isJust)
 import Data.Proxy
 import Data.Void
 import Data.Type.Equality
@@ -236,3 +239,52 @@ decWellModedness modedAtomVars body =
 lemEmptyRight :: IxList '[] (:) p xs -> xs :++: '[] :~: xs
 lemEmptyRight INil                            = Refl
 lemEmptyRight (x :> xs) | Refl <- lemEmptyRight xs = Refl
+
+--------------------------------------------------------------------------------
+-- Tests
+--------------------------------------------------------------------------------
+
+p :: Predicate '[ 'MPlus, 'MDontCare ]
+p = Predicate "p" (SMPlus :> SMDontCare :> INil)
+
+easy :: Predicate '[ 'MDontCare ]
+easy = Predicate "easy" (SMDontCare :> INil)
+
+someEasy = SA $ Atom easy (STVar (Proxy @"X") :> INil)
+
+groundP :: Atom '[] '[ "X" ]
+groundP = Atom p (STLit (Proxy @"Mistral") :> STVar (Proxy @"X") :> INil)
+
+{- We can't even construct the following because the type signature says no
+    moded vars.
+
+groundP :: Atom '[] '[]
+groundP = Atom p (STVar (Proxy @"Mistral") :> STLit (Proxy @"Contrastin") :> INil)
+-}
+
+someGroundP :: SomeAtom
+someGroundP = SA groundP
+
+modedP :: Atom '[ "X" ] '[ "X", "Y" ]
+modedP = Atom p (STVar (Proxy @"X") :> STVar (Proxy @"Y") :> INil)
+
+someModedP :: SomeAtom
+someModedP = SA modedP
+
+tests :: [ ((SomeAtom, [ SomeAtom ]), Bool) ]
+tests =
+  [ ((someEasy, [ someEasy ]) , True)
+  , ((someEasy, [ someModedP ]), False)
+  , ((someEasy, [ someGroundP ]), True)
+  , ((someEasy, [ ]), True)
+  , ((someModedP, [ ]), False)
+  , ((someModedP, [ someEasy, someModedP ]), True)
+  , ((someModedP, [ someModedP, someEasy ]), False)
+  , ((someModedP, [ someEasy, someGroundP, someModedP ]), True)
+  ]
+
+main =
+  forM_ (zip [1..] tests) $ \(ix, (testCase, expectation)) ->
+    if isJust (uncurry mkClause testCase) == expectation
+      then "Test passed."
+      else "Test #" <> show ix <> " failed."
