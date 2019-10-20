@@ -144,6 +144,7 @@ modedVars (Predicate _ modeList) = go modeList
 keepVars :: TermList terms -> VarList (Vars terms)
 keepVars INil               = INil
 keepVars (STVar v :> terms) = v :> keepVars terms
+keepVars (STLit{} :> terms) = keepVars terms
 
 --------------------------------------------------------------------------------
 -- Generic machinery
