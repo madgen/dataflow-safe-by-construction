@@ -147,12 +147,10 @@ instance HasVars Body where
   vars EmptyBody                 = INil
   vars (SnocBody _ _ _ bodyVars) = bodyVars
 
-type ModedVarList modes terms = IxList '[] (:) Proxy (ModedVars modes terms)
-
-modedVars :: Predicate modes -> TermList terms -> ModedVarList modes terms
+modedVars :: Predicate modes -> TermList terms -> VarList (ModedVars modes terms)
 modedVars (Predicate _ modeList) = go modeList
   where
-  go :: ModeList modes -> TermList terms -> ModedVarList modes terms
+  go :: ModeList modes -> TermList terms -> VarList (ModedVars modes terms)
   go INil                     INil                    = INil
   go (SMDontCare :> modeList) (_ :> termList)         = go modeList termList
   go (_ :> modeList)          (STLit{}   :> termList) = go modeList termList
