@@ -23,6 +23,71 @@ import Data.Type.Equality
 
 import GHC.TypeLits
 
+-- ## Program
+
+type Program = [ Clause ]
+
+-- ## Clause
+
+data Clause :: Type where
+  Clause :: Head headVars
+         -> Body bodyVars
+         -- | Range restriction
+         -> AllElem headVars bodyVars
+         -> Clause
+
+-- ## Head
+
+-- | Clause heads shouldn't have moded predicates, hence they don't have moded
+-- variables.
+type Head headVars = Atom '[] headVars
+
+data SomeHead = forall vars . SH (Head vars)
+
+-- ## Body
+
+data Body :: [ Var ] -> Type where
+  EmptyBody :: Body '[]
+  SnocBody  :: Body bodyVars
+            -> Atom modedVars atomVars
+            -- | Well-modedness
+            -> AllElem modedVars bodyVars
+            -- | All body variables
+            -> VarList (atomVars :++: bodyVars)
+            -> Body (atomVars :++: bodyVars)
+
+data SomeBody = forall bodyVars. SB (Body bodyVars)
+
+-- ## Atom
+
+data Atom :: [ Var ] -> [ Var ] -> Type where
+  Atom :: Predicate modes
+       -> TermList terms
+       -> Atom (ModedVars modes terms) (Vars terms)
+
+data SomeAtom = forall vars modedVars. SA (Atom modedVars vars)
+
+type family ModedVars (modes :: [ Mode ]) (terms :: [ Term ]) :: [ Var ] where
+  ModedVars '[]                   '[]                       = '[]
+  ModedVars ('MDontCare ': modes) (_ ': terms)              = ModedVars modes terms
+  ModedVars (_          ': modes) ('( 'TLit, _)   ': terms) = ModedVars modes terms
+  ModedVars ('MPlus     ': modes) ('( 'TVar, var) ': terms) = var ': ModedVars modes terms
+  ModedVars _ _ = TypeError (Text "Modes and terms are not of equal length.")
+
+-- ## Predicate
+
+data Predicate (modes :: [ Mode ]) = Predicate String (ModeList modes)
+
+type ModeList (modes :: [ Mode ]) = IxList '[] (:) SMode modes
+
+data Mode = MPlus | MDontCare
+
+data SMode :: Mode -> Type where
+  SMPlus     :: SMode MPlus
+  SMDontCare :: SMode MDontCare
+
+-- ## Term
+
 type Var = Symbol
 
 data TermTag = TVar | TLit
@@ -41,58 +106,6 @@ type family Vars (terms :: [ Term ]) :: [ Var ] where
   Vars ('( 'TLit, _)   ': terms) = Vars terms
 
 type VarList (vars :: [ Var ]) = IxList '[] (:) Proxy vars
-
-data Mode = MPlus | MDontCare
-
-data SMode :: Mode -> Type where
-  SMPlus     :: SMode MPlus
-  SMDontCare :: SMode MDontCare
-
-type ModeList (modes :: [ Mode ]) = IxList '[] (:) SMode modes
-
-data Predicate (modes :: [ Mode ]) = Predicate String (ModeList modes)
-
-type family ModedVars (modes :: [ Mode ]) (terms :: [ Term ]) :: [ Var ] where
-  ModedVars '[]                   '[]                       = '[]
-  ModedVars ('MDontCare ': modes) (_ ': terms)              = ModedVars modes terms
-  ModedVars (_          ': modes) ('( 'TLit, _)   ': terms) = ModedVars modes terms
-  ModedVars ('MPlus     ': modes) ('( 'TVar, var) ': terms) = var ': ModedVars modes terms
-  ModedVars _ _ = TypeError (Text "Modes and terms are not of equal length.")
-
-data Atom :: [ Var ] -> [ Var ] -> Type where
-  Atom :: Predicate modes
-       -> TermList terms
-       -> Atom (ModedVars modes terms) (Vars terms)
-
-data SomeAtom = forall vars modedVars. SA (Atom modedVars vars)
-data SomeHead = forall vars          . SH (Head vars)
-
-type BodyVarList (vars :: [ Var ]) = IxList '[] (:) Proxy vars
-
-data Body :: [ Var ] -> Type where
-  EmptyBody :: Body '[]
-  SnocBody  :: Body bodyVars
-            -> Atom modedVars atomVars
-            -- | Well-modedness
-            -> AllElem modedVars bodyVars
-            -- | All body variables
-            -> BodyVarList (atomVars :++: bodyVars)
-            -> Body (atomVars :++: bodyVars)
-
-data SomeBody = forall bodyVars. SB (Body bodyVars)
-
--- | Clause heads shouldn't have moded predicates, hence they don't have moded
--- variables.
-type Head headVars = Atom '[] headVars
-
-data Clause :: Type where
-  Clause :: Head headVars
-         -> Body bodyVars
-         -- | Range restriction
-         -> AllElem headVars bodyVars
-         -> Clause
-
-type Program = [ Clause ]
 
 --------------------------------------------------------------------------------
 -- Smart constructors: Untyped -> Typed
