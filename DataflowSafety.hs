@@ -67,13 +67,6 @@ data Atom :: [ Var ] -> [ Var ] -> Type where
 
 data SomeAtom = forall vars modedVars. SA (Atom modedVars vars)
 
-type family ModedVars (modes :: [ Mode ]) (terms :: [ Term ]) :: [ Var ] where
-  ModedVars '[]                   '[]                       = '[]
-  ModedVars ('MDontCare ': modes) (_ ': terms)              = ModedVars modes terms
-  ModedVars (_          ': modes) ('( 'TLit, _)   ': terms) = ModedVars modes terms
-  ModedVars ('MPlus     ': modes) ('( 'TVar, var) ': terms) = var ': ModedVars modes terms
-  ModedVars _ _ = TypeError (Text "Modes and terms are not of equal length.")
-
 -- ## Predicate
 
 data Predicate (modes :: [ Mode ]) = Predicate String (ModeList modes)
@@ -99,13 +92,7 @@ data STerm :: Term -> Type where
   STLit :: Proxy sym -> STerm '(TLit, sym)
 
 type TermList (terms :: [ Term ]) = IxList '[] (:) STerm terms
-
-type family Vars (terms :: [ Term ]) :: [ Var ] where
-  Vars '[]                       = '[]
-  Vars ('( 'TVar, sym) ': terms) = sym ': Vars terms
-  Vars ('( 'TLit, _)   ': terms) = Vars terms
-
-type VarList (vars :: [ Var ]) = IxList '[] (:) Proxy vars
+type VarList  (vars  :: [ Var ])  = IxList '[] (:) Proxy vars
 
 --------------------------------------------------------------------------------
 -- Smart constructors: Untyped -> Typed
@@ -151,16 +138,29 @@ modedVars :: Predicate modes -> TermList terms -> VarList (ModedVars modes terms
 modedVars (Predicate _ modeList) = go modeList
   where
   go :: ModeList modes -> TermList terms -> VarList (ModedVars modes terms)
-  go INil                     INil                    = INil
-  go (SMDontCare :> modeList) (_ :> termList)         = go modeList termList
-  go (_ :> modeList)          (STLit{}   :> termList) = go modeList termList
-  go (SMPlus :> modeList)     (STVar var :> termList) = var :> go modeList termList
+  go INil               INil              = INil
+  go (SMDontCare :> ms) (_         :> ts) = go ms ts
+  go (_          :> ms) (STLit{}   :> ts) = go ms ts
+  go (SMPlus     :> ms) (STVar var :> ts) = var :> go ms ts
   go _ _ = error "Mode and term list size mismatch"
 
 keepVars :: TermList terms -> VarList (Vars terms)
 keepVars INil               = INil
 keepVars (STVar v :> terms) = v :> keepVars terms
 keepVars (STLit{} :> terms) = keepVars terms
+
+type family Vars (terms :: [ Term ]) :: [ Var ] where
+  Vars '[]                       = '[]
+  Vars ('( 'TVar, sym) ': terms) = sym ': Vars terms
+  Vars ('( 'TLit, _)   ': terms) = Vars terms
+
+type family ModedVars (modes :: [ Mode ]) (terms :: [ Term ]) :: [ Var ] where
+  ModedVars '[]                '[]                    =        '[]
+  ModedVars ('MDontCare ': ms) (_ ': ts)              =        ModedVars ms ts
+  ModedVars (_          ': ms) ('( 'TLit, _)   ': ts) =        ModedVars ms ts
+  ModedVars ('MPlus     ': ms) ('( 'TVar, var) ': ts) = var ': ModedVars ms ts
+  ModedVars _ _ = TypeError (Text "Modes and terms are not of equal length.")
+
 
 --------------------------------------------------------------------------------
 -- Generic machinery
