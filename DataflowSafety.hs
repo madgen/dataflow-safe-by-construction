@@ -1,3 +1,5 @@
+{-# OPTIONS_GHC -fplugin GHC.TypeLits.Normalise #-}
+
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE PolyKinds #-}
@@ -61,17 +63,18 @@ data SomeBody = forall bodyVars. SB (Body bodyVars)
 -- ## Atom
 
 data Atom :: [ Var ] -> [ Var ] -> Type where
-  Atom :: Predicate modes
-       -> TermList terms
+  Atom :: Predicate n modes
+       -> TermList n terms
        -> Atom (ModedVars modes terms) (Vars terms)
 
 data SomeAtom = forall vars modedVars. SA (Atom modedVars vars)
 
 -- ## Predicate
 
-data Predicate (modes :: [ Mode ]) = Predicate String (ModeList modes)
+data Predicate (n :: Nat) (modes :: [ Mode ]) =
+  Predicate String (Proxy n) (ModeList n modes)
 
-type ModeList (modes :: [ Mode ]) = HList SMode modes
+type ModeList (n :: Nat) (modes :: [ Mode ]) = HVect SMode n modes
 
 data Mode = MPlus | MDontCare
 
@@ -91,7 +94,7 @@ data STerm :: Term -> Type where
   STVar :: Proxy sym -> STerm '(TVar, sym)
   STLit :: Proxy sym -> STerm '(TLit, sym)
 
-type TermList (terms :: [ Term ]) = HList STerm terms
+type TermList (n :: Nat) (terms :: [ Term ]) = HVect STerm n terms
 type VarList  (vars  :: [ Var ])  = HList Proxy vars
 
 --------------------------------------------------------------------------------
@@ -134,20 +137,22 @@ instance HasVars Body where
   vars EmptyBody                 = HNil
   vars (SnocBody _ _ _ bodyVars) = bodyVars
 
-modedVars :: Predicate modes -> TermList terms -> VarList (ModedVars modes terms)
-modedVars (Predicate _ modeList) = go modeList
+modedVars :: Predicate n modes
+          -> TermList  n terms
+          -> VarList (ModedVars modes terms)
+modedVars (Predicate _ _ modeList) = go modeList
   where
-  go :: ModeList modes -> TermList terms -> VarList (ModedVars modes terms)
-  go HNil               HNil              = HNil
-  go (SMDontCare :> ms) (_         :> ts) = go ms ts
-  go (_          :> ms) (STLit{}   :> ts) = go ms ts
-  go (SMPlus     :> ms) (STVar var :> ts) = var :> go ms ts
+  go :: ModeList n modes -> TermList n terms -> VarList (ModedVars modes terms)
+  go HVNil               HVNil              = HNil
+  go (SMDontCare :=> ms) (_         :=> ts) =        go ms ts
+  go (_          :=> ms) (STLit{}   :=> ts) =        go ms ts
+  go (SMPlus     :=> ms) (STVar var :=> ts) = var :> go ms ts
   go _ _ = error "Mode and term list size mismatch"
 
-keepVars :: TermList terms -> VarList (Vars terms)
-keepVars HNil                = HNil
-keepVars (STVar v :> terms) = v :> keepVars terms
-keepVars (STLit{} :> terms) = keepVars terms
+keepVars :: TermList n terms -> VarList (Vars terms)
+keepVars HVNil               = HNil
+keepVars (STVar v :=> terms) = v :> keepVars terms
+keepVars (STLit{} :=> terms) = keepVars terms
 
 type family Vars (terms :: [ Term ]) :: [ Var ] where
   Vars '[]                       = '[]
@@ -173,8 +178,14 @@ type family (xs :: [ k ]) :++: (ys :: [ k ]) :: [ k ] where
 infixr 5 :>
 
 data HList :: (a -> Type) -> [ a ] -> Type where
-  HNil  :: HList c '[]
+  HNil :: HList c '[]
   (:>) :: HListConstraint a => c a -> HList c as -> HList c (a ': as)
+
+infixr 5 :=>
+
+data HVect :: (a -> Type) -> Nat -> [ a ] -> Type where
+  HVNil  :: HVect c 0 '[]
+  (:=>)  :: HListConstraint a => c a -> HVect c n as -> HVect c (1 + n) (a ': as)
 
 class Trivial a
 
@@ -261,16 +272,17 @@ lemEmptyRight (x :> xs) | Refl <- lemEmptyRight xs = Refl
 -- Tests
 --------------------------------------------------------------------------------
 
-p :: Predicate '[ 'MPlus, 'MDontCare ]
-p = Predicate "p" (SMPlus :> SMDontCare :> HNil)
+p :: Predicate 2 '[ 'MPlus, 'MDontCare ]
+p = Predicate "p" Proxy (SMPlus :=> SMDontCare :=> HVNil)
 
-easy :: Predicate '[ 'MDontCare ]
-easy = Predicate "easy" (SMDontCare :> HNil)
+easy :: Predicate 1 '[ 'MDontCare ]
+easy = Predicate "easy" Proxy (SMDontCare :=> HVNil)
 
-someEasy = SA $ Atom easy (STVar (Proxy @"X") :> HNil)
+someEasy :: SomeAtom
+someEasy = SA $ Atom easy (STVar (Proxy @"X") :=> HVNil)
 
 groundP :: Atom '[] '[ "X" ]
-groundP = Atom p (STLit (Proxy @"Mistral") :> STVar (Proxy @"X") :> HNil)
+groundP = Atom p (STLit (Proxy @"Mistral") :=> STVar (Proxy @"X") :=> HVNil)
 
 {- We can't even construct the following because the type signature says no
     moded vars.
@@ -283,7 +295,7 @@ someGroundP :: SomeAtom
 someGroundP = SA groundP
 
 modedP :: Atom '[ "X" ] '[ "X", "Y" ]
-modedP = Atom p (STVar (Proxy @"X") :> STVar (Proxy @"Y") :> HNil)
+modedP = Atom p (STVar (Proxy @"X") :=> STVar (Proxy @"Y") :=> HVNil)
 
 someModedP :: SomeAtom
 someModedP = SA modedP
