@@ -315,8 +315,9 @@ tests =
   ]
 
 main :: IO ()
-main =
-  forM_ (zip tests [(1 :: Int)..]) $ \((testCase, expectation), ix) ->
+main = forM_ (zip tests [(1 :: Int)..]) runTestCase
+  where
+  runTestCase ((testCase, expectation), ix) =
     putStrLn $ if isJust (uncurry mkClause testCase) == expectation
       then "Test passed."
       else "Test #" <> show ix <> " failed."
