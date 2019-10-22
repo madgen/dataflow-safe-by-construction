@@ -71,7 +71,7 @@ data SomeAtom = forall vars modedVars. SA (Atom modedVars vars)
 
 data Predicate (modes :: [ Mode ]) = Predicate String (ModeList modes)
 
-type ModeList (modes :: [ Mode ]) = IxList '[] (:) SMode modes
+type ModeList (modes :: [ Mode ]) = HList SMode modes
 
 data Mode = MPlus | MDontCare
 
@@ -91,8 +91,8 @@ data STerm :: Term -> Type where
   STVar :: Proxy sym -> STerm '(TVar, sym)
   STLit :: Proxy sym -> STerm '(TLit, sym)
 
-type TermList (terms :: [ Term ]) = IxList '[] (:) STerm terms
-type VarList  (vars  :: [ Var ])  = IxList '[] (:) Proxy vars
+type TermList (terms :: [ Term ]) = HList STerm terms
+type VarList  (vars  :: [ Var ])  = HList Proxy vars
 
 --------------------------------------------------------------------------------
 -- Smart constructors: Untyped -> Typed
@@ -131,21 +131,21 @@ instance HasVars (Atom modedVars) where
   vars (Atom _ termList) = keepVars termList
 
 instance HasVars Body where
-  vars EmptyBody                 = INil
+  vars EmptyBody                 = HNil
   vars (SnocBody _ _ _ bodyVars) = bodyVars
 
 modedVars :: Predicate modes -> TermList terms -> VarList (ModedVars modes terms)
 modedVars (Predicate _ modeList) = go modeList
   where
   go :: ModeList modes -> TermList terms -> VarList (ModedVars modes terms)
-  go INil               INil              = INil
+  go HNil               HNil              = HNil
   go (SMDontCare :> ms) (_         :> ts) = go ms ts
   go (_          :> ms) (STLit{}   :> ts) = go ms ts
   go (SMPlus     :> ms) (STVar var :> ts) = var :> go ms ts
   go _ _ = error "Mode and term list size mismatch"
 
 keepVars :: TermList terms -> VarList (Vars terms)
-keepVars INil               = INil
+keepVars HNil                = HNil
 keepVars (STVar v :> terms) = v :> keepVars terms
 keepVars (STLit{} :> terms) = keepVars terms
 
@@ -170,26 +170,24 @@ type family (xs :: [ k ]) :++: (ys :: [ k ]) :: [ k ] where
   '[]       :++: ys = ys
   (x ': xs) :++: ys = x ': (xs :++: ys)
 
-infixr 6 :>
+infixr 5 :>
 
-data IxList :: b -> (a -> b -> b) -> (a -> Type) -> b -> Type where
-  INil ::                                                IxList e f c e
-  (:>) :: IxListConstraint a => c a -> IxList e f c b -> IxList e f c (f a b)
+data HList :: (a -> Type) -> [ a ] -> Type where
+  HNil  :: HList c '[]
+  (:>) :: HListConstraint a => c a -> HList c as -> HList c (a ': as)
 
 class Trivial a
 
 instance Trivial a
 
-type family IxListConstraint (a :: k) :: Constraint where
-  IxListConstraint (sym :: Symbol)        = KnownSymbol sym
-  IxListConstraint ('(term, sym) :: Term) = KnownSymbol sym
-  IxListConstraint a                      = Trivial a
+type family HListConstraint (a :: k) :: Constraint where
+  HListConstraint (sym :: Symbol)        = KnownSymbol sym
+  HListConstraint ('(term, sym) :: Term) = KnownSymbol sym
+  HListConstraint a                      = Trivial a
 
-append :: IxList '[] (:) c m
-       -> IxList '[] (:) c n
-       -> IxList '[] (:) c (m :++: n)
-append INil ys = ys
-append (x :> xs) ys = x :> append xs ys
+append :: HList c m -> HList c n -> HList c (m :++: n)
+HNil       `append` ys = ys
+(x :> xs) `append` ys = x :> xs `append` ys
 
 data Dec :: Type -> Type where
   Yes :: k           -> Dec k
@@ -211,7 +209,7 @@ type AllElem xs ys = All (Elem ys) xs
 
 decElem :: forall var vars. KnownSymbol var
         => Proxy var -> VarList vars -> Maybe (Elem vars var)
-decElem el INil = Nothing
+decElem el HNil = Nothing
 decElem var (var' :> els) =
   case sameSymbol var var' of
     Just Refl -> Just Here
@@ -221,14 +219,14 @@ decElem var (var' :> els) =
         Nothing        -> Nothing
 
 decAllElem :: VarList vars -> VarList vars' -> Maybe (AllElem vars vars')
-decAllElem INil ys      = Just Basic
+decAllElem HNil ys      = Just Basic
 decAllElem (x :> xs) ys =
   case (decElem x ys, decAllElem xs ys) of
     (Just elem, Just allElem) -> Just $ Next elem allElem
     _ -> Nothing
 
-decEmpty :: IxList '[] f a xs -> Maybe (xs :~: '[])
-decEmpty INil = Just Refl
+decEmpty :: HList a xs -> Maybe (xs :~: '[])
+decEmpty HNil = Just Refl
 decEmpty _    = Nothing
 
 decRangeRestriction :: Head headVars
@@ -255,8 +253,8 @@ decWellModedness modedAtomVars body =
 -- Lemmas
 --------------------------------------------------------------------------------
 
-lemEmptyRight :: IxList '[] (:) p xs -> xs :++: '[] :~: xs
-lemEmptyRight INil                                 = Refl
+lemEmptyRight :: HList p xs -> xs :++: '[] :~: xs
+lemEmptyRight HNil                                 = Refl
 lemEmptyRight (x :> xs) | Refl <- lemEmptyRight xs = Refl
 
 --------------------------------------------------------------------------------
@@ -264,15 +262,15 @@ lemEmptyRight (x :> xs) | Refl <- lemEmptyRight xs = Refl
 --------------------------------------------------------------------------------
 
 p :: Predicate '[ 'MPlus, 'MDontCare ]
-p = Predicate "p" (SMPlus :> SMDontCare :> INil)
+p = Predicate "p" (SMPlus :> SMDontCare :> HNil)
 
 easy :: Predicate '[ 'MDontCare ]
-easy = Predicate "easy" (SMDontCare :> INil)
+easy = Predicate "easy" (SMDontCare :> HNil)
 
-someEasy = SA $ Atom easy (STVar (Proxy @"X") :> INil)
+someEasy = SA $ Atom easy (STVar (Proxy @"X") :> HNil)
 
 groundP :: Atom '[] '[ "X" ]
-groundP = Atom p (STLit (Proxy @"Mistral") :> STVar (Proxy @"X") :> INil)
+groundP = Atom p (STLit (Proxy @"Mistral") :> STVar (Proxy @"X") :> HNil)
 
 {- We can't even construct the following because the type signature says no
     moded vars.
@@ -285,7 +283,7 @@ someGroundP :: SomeAtom
 someGroundP = SA groundP
 
 modedP :: Atom '[ "X" ] '[ "X", "Y" ]
-modedP = Atom p (STVar (Proxy @"X") :> STVar (Proxy @"Y") :> INil)
+modedP = Atom p (STVar (Proxy @"X") :> STVar (Proxy @"Y") :> HNil)
 
 someModedP :: SomeAtom
 someModedP = SA modedP
