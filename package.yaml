@@ -1,0 +1,19 @@
+name: dataflow-safe-by-construction
+version: 0.1.0
+synopsis: Blah
+maintainer: Mistral Contrastin <madgenhetic@gmail.com>
+license: BSD-3-Clause
+github: madgen/dataflow-safe-by-construction
+category: Language
+
+dependencies:
+  - base >= 4.7 && < 5
+  - ghc-typelits-natnormalise >= 0.6.2 && < 0.8
+
+ghc-options: -Wall
+
+library:
+  source-dirs:
+    - .
+  exposed-modules:
+    DataflowSafety
