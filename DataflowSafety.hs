@@ -15,6 +15,8 @@
 
 module DataflowSafety where
 
+import Prelude hiding (head)
+
 import Control.Monad (forM_)
 
 import Data.Kind
@@ -79,8 +81,8 @@ type ModeList (n :: Nat) (modes :: [ Mode ]) = HVect SMode n modes
 data Mode = MPlus | MDontCare
 
 data SMode :: Mode -> Type where
-  SMPlus     :: SMode MPlus
-  SMDontCare :: SMode MDontCare
+  SMPlus     :: SMode 'MPlus
+  SMDontCare :: SMode 'MDontCare
 
 -- ## Term
 
@@ -91,8 +93,8 @@ data TermTag = TVar | TLit
 type Term = (TermTag, Symbol)
 
 data STerm :: Term -> Type where
-  STVar :: Proxy sym -> STerm '(TVar, sym)
-  STLit :: Proxy sym -> STerm '(TLit, sym)
+  STVar :: Proxy sym -> STerm '( 'TVar, sym)
+  STLit :: Proxy sym -> STerm '( 'TLit, sym)
 
 type TermList (n :: Nat) (terms :: [ Term ]) = HVect STerm n terms
 type VarList  (vars  :: [ Var ])  = HList Proxy vars
@@ -164,7 +166,7 @@ type family ModedVars (modes :: [ Mode ]) (terms :: [ Term ]) :: [ Var ] where
   ModedVars ('MDontCare ': ms) (_ ': ts)              =        ModedVars ms ts
   ModedVars (_          ': ms) ('( 'TLit, _)   ': ts) =        ModedVars ms ts
   ModedVars ('MPlus     ': ms) ('( 'TVar, var) ': ts) = var ': ModedVars ms ts
-  ModedVars _ _ = TypeError (Text "Modes and terms are not of equal length.")
+  ModedVars _ _ = TypeError ('Text "Modes and terms are not of equal length.")
 
 
 --------------------------------------------------------------------------------
@@ -220,7 +222,7 @@ type AllElem xs ys = All (Elem ys) xs
 
 decElem :: forall var vars. KnownSymbol var
         => Proxy var -> VarList vars -> Maybe (Elem vars var)
-decElem el HNil = Nothing
+decElem _ HNil = Nothing
 decElem var (var' :> els) =
   case sameSymbol var var' of
     Just Refl -> Just Here
@@ -230,10 +232,10 @@ decElem var (var' :> els) =
         Nothing        -> Nothing
 
 decAllElem :: VarList vars -> VarList vars' -> Maybe (AllElem vars vars')
-decAllElem HNil ys      = Just Basic
+decAllElem HNil _       = Just Basic
 decAllElem (x :> xs) ys =
   case (decElem x ys, decAllElem xs ys) of
-    (Just elem, Just allElem) -> Just $ Next elem allElem
+    (Just el, Just allElem) -> Just $ Next el allElem
     _ -> Nothing
 
 decEmpty :: HList a xs -> Maybe (xs :~: '[])
@@ -266,7 +268,7 @@ decWellModedness modedAtomVars body =
 
 lemEmptyRight :: HList p xs -> xs :++: '[] :~: xs
 lemEmptyRight HNil                                 = Refl
-lemEmptyRight (x :> xs) | Refl <- lemEmptyRight xs = Refl
+lemEmptyRight (_ :> xs) | Refl <- lemEmptyRight xs = Refl
 
 --------------------------------------------------------------------------------
 -- Tests
@@ -314,7 +316,7 @@ tests =
 
 main :: IO ()
 main =
-  forM_ (zip tests [1..]) $ \((testCase, expectation), ix) ->
+  forM_ (zip tests [(1 :: Int)..]) $ \((testCase, expectation), ix) ->
     putStrLn $ if isJust (uncurry mkClause testCase) == expectation
       then "Test passed."
       else "Test #" <> show ix <> " failed."
