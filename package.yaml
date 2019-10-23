@@ -9,6 +9,7 @@ category: Language
 dependencies:
   - base >= 4.7 && < 5
   - ghc-typelits-natnormalise >= 0.6.2 && < 0.8
+  - containers >= 0.6.0 && < 0.7
 
 ghc-options: -Wall
 

@@ -5,25 +5,32 @@
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE GeneralisedNewtypeDeriving #-}
 
 module DataflowSafety where
 
-import Prelude hiding (head)
+import Prelude hiding (head, round, pred)
 
-import Control.Monad (forM_)
+import Control.Monad (forM_, guard)
 
-import Data.Kind
-import Data.Maybe (isJust)
-import Data.Proxy
-import Data.Void
-import Data.Type.Equality
+import           Data.Kind (Type, Constraint)
+import           Data.Maybe (isJust)
+import           Data.Proxy (Proxy(..))
+import qualified Data.Set as S
+import           Data.Type.Equality
+import           Data.Void
 
 import GHC.TypeLits
 
@@ -66,7 +73,7 @@ data SomeBody = forall bodyVars. SB (Body bodyVars)
 
 data Atom :: [ Var ] -> [ Var ] -> Type where
   Atom :: Predicate n modes
-       -> TermList n terms
+       -> Terms n terms
        -> Atom (ModedVars modes terms) (Vars terms)
 
 data SomeAtom = forall vars modedVars. SA (Atom modedVars vars)
@@ -74,9 +81,12 @@ data SomeAtom = forall vars modedVars. SA (Atom modedVars vars)
 -- ## Predicate
 
 data Predicate (n :: Nat) (modes :: [ Mode ]) =
-  Predicate String (Proxy n) (ModeList n modes)
+  Predicate String (Proxy n) (Modes n modes)
 
-type ModeList (n :: Nat) (modes :: [ Mode ]) = HVect SMode n modes
+data SomePredicate (n :: Nat) = forall modes.
+  KnownNat n => SP (Predicate n modes)
+
+type Modes (n :: Nat) (modes :: [ Mode ]) = HVect n SMode modes
 
 data Mode = MPlus | MDontCare
 
@@ -96,8 +106,10 @@ data STerm :: Term -> Type where
   STVar :: Proxy sym -> STerm '( 'TVar, sym)
   STLit :: Proxy sym -> STerm '( 'TLit, sym)
 
-type TermList (n :: Nat) (terms :: [ Term ]) = HVect STerm n terms
-type VarList  (vars  :: [ Var ])  = HList Proxy vars
+type Terms (n :: Nat) (terms :: [ Term ]) = HVect n STerm terms
+type SomeTerms n = SomeHVect n STerm
+
+type VarList (vars :: [ Var ]) = HList Proxy vars
 
 --------------------------------------------------------------------------------
 -- Smart constructors: Untyped -> Typed
@@ -140,18 +152,18 @@ instance HasVars Body where
   vars (SnocBody _ _ _ bodyVars) = bodyVars
 
 modedVars :: Predicate n modes
-          -> TermList  n terms
+          -> Terms  n terms
           -> VarList (ModedVars modes terms)
 modedVars (Predicate _ _ modeList) = go modeList
   where
-  go :: ModeList n modes -> TermList n terms -> VarList (ModedVars modes terms)
+  go :: Modes n modes -> Terms n terms -> VarList (ModedVars modes terms)
   go HVNil               HVNil              = HNil
   go (SMDontCare :=> ms) (_         :=> ts) =        go ms ts
   go (_          :=> ms) (STLit{}   :=> ts) =        go ms ts
   go (SMPlus     :=> ms) (STVar var :=> ts) = var :> go ms ts
   go _ _ = error "Mode and term list size mismatch"
 
-keepVars :: TermList n terms -> VarList (Vars terms)
+keepVars :: Terms n terms -> VarList (Vars terms)
 keepVars HVNil               = HNil
 keepVars (STVar v :=> terms) = v :> keepVars terms
 keepVars (STLit{} :=> terms) = keepVars terms
@@ -168,7 +180,6 @@ type family ModedVars (modes :: [ Mode ]) (terms :: [ Term ]) :: [ Var ] where
   ModedVars ('MPlus     ': ms) ('( 'TVar, var) ': ts) = var ': ModedVars ms ts
   ModedVars _ _ = TypeError ('Text "Modes and terms are not of equal length.")
 
-
 --------------------------------------------------------------------------------
 -- Generic machinery
 --------------------------------------------------------------------------------
@@ -178,16 +189,18 @@ type family (xs :: [ k ]) :++: (ys :: [ k ]) :: [ k ] where
   (x ': xs) :++: ys = x ': (xs :++: ys)
 
 infixr 5 :>
-
 data HList :: (a -> Type) -> [ a ] -> Type where
   HNil :: HList c '[]
   (:>) :: HListConstraint a => c a -> HList c as -> HList c (a ': as)
 
-infixr 5 :=>
+data SomeHList p = forall xs. SHL (HList p xs)
 
-data HVect :: (a -> Type) -> Nat -> [ a ] -> Type where
-  HVNil  :: HVect c 0 '[]
-  (:=>)  :: HListConstraint a => c a -> HVect c n as -> HVect c (1 + n) (a ': as)
+infixr 5 :=>
+data HVect :: Nat -> (a -> Type) -> [ a ] -> Type where
+  HVNil  :: HVect 0 c '[]
+  (:=>)  :: HListConstraint a => c a -> HVect n c as -> HVect (1 + n) c (a ': as)
+
+data SomeHVect n p = forall xs. SHV (HVect n p xs)
 
 class Trivial a
 
@@ -199,8 +212,8 @@ type family HListConstraint (a :: k) :: Constraint where
   HListConstraint a                      = Trivial a
 
 append :: HList c m -> HList c n -> HList c (m :++: n)
-HNil       `append` ys = ys
-(x :> xs) `append` ys = x :> xs `append` ys
+HNil      `append` ys = ys
+(x :> xs) `append` ys = x :> (xs `append` ys)
 
 data Dec :: Type -> Type where
   Yes :: k           -> Dec k
@@ -269,6 +282,113 @@ decWellModedness modedAtomVars body =
 lemEmptyRight :: HList p xs -> xs :++: '[] :~: xs
 lemEmptyRight HNil                                 = Refl
 lemEmptyRight (_ :> xs) | Refl <- lemEmptyRight xs = Refl
+
+--------------------------------------------------------------------------------
+-- Datalog evaluator
+--------------------------------------------------------------------------------
+
+data Tuple n = forall (xs :: [ Var ]). T (HVect n Proxy xs)
+
+data Relation = forall n. Relation (SomePredicate n) (S.Set (Tuple n))
+
+newtype Solution = Solution [ Relation ] deriving (Eq)
+
+{-
+step :: Solution -> Clause -> Relation
+step solution Clause = _
+
+round :: Program -> Solution -> Solution
+round program solution = mconcat (map (singleton . step $ solution) program)
+                      <> solution
+
+evaluator :: Program -> Solution -> Solution
+evaluator program solution =
+  if newSolution == solution
+    then solution
+    else evaluator program newSolution
+  where
+  newSolution = round program solution
+-}
+
+--------------------------------------------------------------------------------
+-- Combination
+--------------------------------------------------------------------------------
+
+singleton :: Relation -> Solution
+singleton = Solution . (:[])
+
+add :: Relation -> Solution -> Solution
+add rel (Solution rels) = Solution $ go rel rels
+  where
+  go :: Relation -> [ Relation ] -> [ Relation ]
+  go r [] = [ r ]
+  go r1@(Relation (SP (Predicate _ ari1 _)) _)
+    (r2@(Relation (SP (Predicate _ ari2 _)) _) : rs) =
+    case natVal ari1 `compare` natVal ari2 of
+      GT -> r2 : go r1 rs
+      EQ -> (r1 <> r2) : rs
+      LT -> r1 : r2 : rs
+
+instance Semigroup Solution where
+  Solution rels <> solution = foldr add solution rels
+
+instance Monoid Solution where
+  mempty = Solution []
+
+instance Semigroup Relation where
+  Relation pred tuples <> Relation pred' tuples'
+    | Just Refl <- pred `testEquality` pred' = Relation pred $ tuples <> tuples'
+    | otherwise = error "Tried to combine relations that does not share a head."
+
+--------------------------------------------------------------------------------
+-- Equality
+--------------------------------------------------------------------------------
+
+instance Eq Relation where
+  Relation p1 tuples1 == Relation p2 tuples2
+    | Just Refl <- testEquality p1 p2 =
+      all (`elem` tuples1) tuples2 &&
+      all (`elem` tuples2) tuples1
+    | otherwise = False
+
+instance Ord (Tuple n) where
+  T HVNil      `compare` T HVNil = EQ
+  T (x :=> xs) `compare` T (y :=> ys) =
+    case symbolVal x `compare` symbolVal y of
+      EQ  -> T xs `compare` T ys
+      cmp -> cmp
+  _ `compare` _ = error "Impossible strikes once again."
+
+instance Eq (Tuple n) where
+  T vec1 == T vec2 = go vec1 vec2
+    where
+    go :: forall m (xs :: [ Symbol ]) (ys :: [ Symbol ])
+        . HVect m Proxy xs -> HVect m Proxy ys -> Bool
+    go HVNil      HVNil        = False
+    go (v :=> vs) (v' :=> vs') = isJust (sameSymbol v v') && go vs vs'
+    go _ _ = error "Impossible for tuple vector not to be equal size"
+
+instance TestEquality SomePredicate where
+  testEquality (SP (Predicate name1 arity1 _))
+               (SP (Predicate name2 arity2 _)) = do
+    guard (name1 == name2)
+    sameNat arity1 arity2
+
+instance TestEquality p => TestEquality (HList p) where
+  testEquality HNil HNil = Just Refl
+  testEquality (x :> xs) (y :> ys) = do
+    Refl <- x  `testEquality` y
+    Refl <- xs `testEquality` ys
+    pure Refl
+  testEquality _ _ = Nothing
+
+instance TestEquality p => TestEquality (HVect n p) where
+  testEquality HVNil HVNil = Just Refl
+  testEquality (x :=> xs) (y :=> ys) = do
+    Refl <- x  `testEquality` y
+    Refl <- xs `testEquality` ys
+    pure Refl
+  testEquality _ _     = error "Impossible in hetero vector comparison."
 
 --------------------------------------------------------------------------------
 -- Tests
