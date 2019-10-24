@@ -287,7 +287,26 @@ lemEmptyRight (_ :> xs) | Refl <- lemEmptyRight xs = Refl
 -- Datalog evaluator
 --------------------------------------------------------------------------------
 
-data Tuple n = forall (xs :: [ Var ]). T (HVect n Proxy xs)
+data Substitution (var :: Var) = Substitution (Proxy var) (Proxy Symbol)
+
+type Unifier (vars :: [ Var ]) = HList Substitution vars
+
+{-
+unify :: Terms n terms -> Tuple n -> Maybe (Unifier (Vars terms))
+unify = _
+
+findUnifiers :: Atom modedVars vars -> Solution -> S.Set (Unifier vars)
+findUnifiers = _
+
+substitute :: Atom modedVars vars -> Unifier vars' ->  Atom modedVars (vars \\ vars')
+substitute = _
+-}
+
+--------------------------------------------------------------------------------
+-- Datalog evaluator
+--------------------------------------------------------------------------------
+
+data Tuple n = forall (xs :: [ Symbol ]). T (HVect n Proxy xs)
 
 data Relation = forall n. Relation (SomePredicate n) (S.Set (Tuple n))
 
@@ -295,10 +314,10 @@ newtype Solution = Solution [ Relation ] deriving (Eq)
 
 {-
 step :: Solution -> Clause -> Relation
-step solution Clause = _
+step solution clause = _
 
 round :: Program -> Solution -> Solution
-round program solution = mconcat (map (singleton . step $ solution) program)
+round program solution = mconcat (map (singleton . step solution) program)
                       <> solution
 
 evaluator :: Program -> Solution -> Solution
