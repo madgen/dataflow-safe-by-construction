@@ -4,6 +4,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TemplateHaskell #-}
@@ -42,7 +43,7 @@ data All :: (k -> Type) -> [ k ] -> Type where
   Basic :: All p '[]
   Next  :: p k -> All p ks -> All p (k ': ks)
 
-type AllElem xs ys = All (Elem ys) xs
+type AllElem (xs :: [ k ]) (ys :: [ k ]) = All (Elem ys) xs
 
 -- ## Term
 
@@ -193,38 +194,38 @@ type family ModedVars (modes :: [ Mode ]) (terms :: [ Term ]) :: [ Symbol ] wher
 -- Decision procedures
 --------------------------------------------------------------------------------
 
-decElem :: forall var vars. SP.Sing var -> VarList vars -> Maybe (Elem vars var)
+fromDecision :: SP.Decision k -> Maybe k
+fromDecision (SP.Proved prf) = Just prf
+fromDecision _               = Nothing
+
+decElem :: forall (x :: k) (xs :: [ k ])
+         . SP.SDecide k
+        => SP.Sing x -> SP.SList xs -> Maybe (Elem xs x)
 decElem _ SP.SNil = Nothing
-decElem var (var' `SP.SCons` els) =
-  case var SP.%~ var' of
+decElem x (y `SP.SCons` ys) =
+  case x SP.%~ y of
     SP.Proved Refl -> Just Here
-    _ ->
-      case decElem var els of
-        Just elemProof -> Just $ There elemProof
-        Nothing        -> Nothing
+    _              -> There <$> decElem x ys
 
-decAllElem :: VarList vars -> VarList vars' -> Maybe (AllElem vars vars')
-decAllElem SP.SNil _    = Just Basic
-decAllElem (x `SP.SCons` xs) ys =
-  case (decElem x ys, decAllElem xs ys) of
-    (Just el, Just allElem) -> Just $ Next el allElem
-    _ -> Nothing
+decAllElem :: forall (xs :: [ k ]) (ys :: [ k ])
+            . SP.SDecide k
+           => SP.SList xs -> SP.SList ys -> Maybe (AllElem xs ys)
+decAllElem SP.SNil           _  = Just Basic
+decAllElem (x `SP.SCons` xs) ys = Next <$> decElem x ys <*> decAllElem xs ys
 
-decEmpty :: forall (xs :: [ a ]). SP.SDecide a => SP.SList xs -> Maybe (xs :~: '[])
-decEmpty xs =
-  case xs SP.%~ SP.SNil of
-    SP.Proved prf -> Just prf
-    _             -> Nothing
+decEmpty :: forall (xs :: [ k ])
+          . SP.SDecide k
+         => SP.SList xs -> Maybe (xs :~: '[])
+decEmpty xs = fromDecision $ xs SP.%~ SP.SNil
 
 decRangeRestriction :: Head headVars
                     -> Body bodyVars
                     -> Maybe (AllElem headVars bodyVars)
-decRangeRestriction atom body =
-  case body of
-    EmptyBody -> do
-      Refl <- decEmpty $ vars atom
-      pure Basic
-    SnocBody _ _ _ bodyVars -> decAllElem (vars atom) bodyVars
+decRangeRestriction atom = \case
+  EmptyBody -> do
+    Refl <- decEmpty $ vars atom
+    pure Basic
+  SnocBody _ _ _ bodyVars -> decAllElem (vars atom) bodyVars
 
 decWellModedness :: VarList modedVars
                  -> Body bodyVars
@@ -342,7 +343,7 @@ instance Eq Relation where
       all (`elem` tuples2) tuples1
     | otherwise = False
 
-instance KnownNat n => Ord (Tuple n) where
+instance Ord (Tuple n) where
   T xs _ `compare` T ys _ = SP.fromSing xs `compare` SP.fromSing ys
 
 instance Eq (Tuple n) where
