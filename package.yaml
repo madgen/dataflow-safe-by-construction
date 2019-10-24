@@ -1,6 +1,6 @@
 name: dataflow-safe-by-construction
 version: 0.1.0
-synopsis: Blah
+synopsis: A Datalog implementation with mechanised dataflow safety
 maintainer: Mistral Contrastin <madgenhetic@gmail.com>
 license: BSD-3-Clause
 github: madgen/dataflow-safe-by-construction
@@ -10,11 +10,11 @@ dependencies:
   - base >= 4.7 && < 5
   - ghc-typelits-natnormalise >= 0.6.2 && < 0.8
   - containers >= 0.6.0 && < 0.7
+  - singletons >= 2.5 && < 2.6
+  - text >= 1.2 && < 1.3
 
 ghc-options: -Wall
 
 library:
   source-dirs:
     - .
-  exposed-modules:
-    DataflowSafety

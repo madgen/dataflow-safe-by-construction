@@ -5,19 +5,10 @@
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE KindSignatures #-}
-{-# LANGUAGE PatternSynonyms #-}
-{-# LANGUAGE ConstraintKinds #-}
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE ExistentialQuantification #-}
-{-# LANGUAGE GeneralisedNewtypeDeriving #-}
 
 module DataflowSafety where
 
@@ -25,27 +16,71 @@ import Prelude hiding (head, round, pred)
 
 import Control.Monad (forM_, guard)
 
-import           Data.Kind (Type, Constraint)
+import qualified Data.Text as T
+import           Data.Kind (Type)
 import           Data.Maybe (isJust)
-import           Data.Proxy (Proxy(..))
 import qualified Data.Set as S
 import           Data.Type.Equality
-import           Data.Void
+
+import qualified Data.Singletons.Prelude      as SP
+import qualified Data.Singletons.Prelude.List as SP
+import qualified Data.Singletons.TypeLits     as SP
+import qualified Data.Singletons.Decide       as SP
+import           Data.Singletons.TH (singletons)
 
 import GHC.TypeLits
 
--- ## Program
+--------------------------------------------------------------------------------
+-- Generic machinery
+--------------------------------------------------------------------------------
 
-type Program = [ Clause ]
+data Elem :: [ k ] -> k -> Type where
+  Here  ::              Elem (k ': ks) k
+  There :: Elem ks k -> Elem (a ': ks) k
 
--- ## Clause
+data All :: (k -> Type) -> [ k ] -> Type where
+  Basic :: All p '[]
+  Next  :: p k -> All p ks -> All p (k ': ks)
 
-data Clause :: Type where
-  Clause :: Head headVars
-         -> Body bodyVars
-         -- | Range restriction
-         -> AllElem headVars bodyVars
-         -> Clause
+type AllElem xs ys = All (Elem ys) xs
+
+-- ## Term
+
+data Term = Var Symbol | Sym Symbol
+
+data instance SP.Sing (x :: Term) where
+  SVar :: KnownSymbol sym => SP.SSymbol sym -> SP.Sing ('Var sym)
+  SSym :: KnownSymbol sym => SP.SSymbol sym -> SP.Sing ('Sym sym)
+
+type STerm (x :: Term) = SP.Sing x
+
+data Terms (n :: Nat) (terms :: [ Term ]) =
+  Terms (SP.SList terms) (SP.Length terms :~: n)
+
+type VarList (vars :: [ Symbol ]) = SP.SList vars
+
+-- ## Predicate
+
+$(singletons [d|
+  data Mode = MPlus | MDontCare
+  |])
+
+type Modes (modes :: [ Mode ]) = SP.SList modes
+
+data Predicate (n :: Nat) (modes :: [ Mode ]) =
+  Predicate String (Modes modes) (SP.SNat n)
+
+data SomePredicate (n :: Nat) = forall modes.
+  KnownNat n => SP (Predicate n modes)
+
+-- ## Atom
+
+data Atom :: [ Symbol ] -> [ Symbol ] -> Type where
+  Atom :: Predicate n modes
+       -> Terms n terms
+       -> Atom (ModedVars modes terms) (Vars terms)
+
+data SomeAtom = forall vars modedVars. SA (Atom modedVars vars)
 
 -- ## Head
 
@@ -57,59 +92,30 @@ data SomeHead = forall vars . SH (Head vars)
 
 -- ## Body
 
-data Body :: [ Var ] -> Type where
+data Body :: [ Symbol ] -> Type where
   EmptyBody :: Body '[]
   SnocBody  :: Body bodyVars
             -> Atom modedVars atomVars
             -- | Well-modedness
             -> AllElem modedVars bodyVars
             -- | All body variables
-            -> VarList (atomVars :++: bodyVars)
-            -> Body (atomVars :++: bodyVars)
+            -> VarList (atomVars SP.++ bodyVars)
+            -> Body (atomVars SP.++ bodyVars)
 
 data SomeBody = forall bodyVars. SB (Body bodyVars)
 
--- ## Atom
+-- ## Clause
 
-data Atom :: [ Var ] -> [ Var ] -> Type where
-  Atom :: Predicate n modes
-       -> Terms n terms
-       -> Atom (ModedVars modes terms) (Vars terms)
+data Clause :: Type where
+  Clause :: Head headVars
+         -> Body bodyVars
+         -- | Range restriction
+         -> AllElem headVars bodyVars
+         -> Clause
 
-data SomeAtom = forall vars modedVars. SA (Atom modedVars vars)
+-- ## Program
 
--- ## Predicate
-
-data Predicate (n :: Nat) (modes :: [ Mode ]) =
-  Predicate String (Proxy n) (Modes n modes)
-
-data SomePredicate (n :: Nat) = forall modes.
-  KnownNat n => SP (Predicate n modes)
-
-type Modes (n :: Nat) (modes :: [ Mode ]) = HVect n SMode modes
-
-data Mode = MPlus | MDontCare
-
-data SMode :: Mode -> Type where
-  SMPlus     :: SMode 'MPlus
-  SMDontCare :: SMode 'MDontCare
-
--- ## Term
-
-type Var = Symbol
-
-data TermTag = TVar | TLit
-
-type Term = (TermTag, Symbol)
-
-data STerm :: Term -> Type where
-  STVar :: Proxy sym -> STerm '( 'TVar, sym)
-  STLit :: Proxy sym -> STerm '( 'TLit, sym)
-
-type Terms (n :: Nat) (terms :: [ Term ]) = HVect n STerm terms
-type SomeTerms n = SomeHVect n STerm
-
-type VarList (vars :: [ Var ]) = HList Proxy vars
+type Program = [ Clause ]
 
 --------------------------------------------------------------------------------
 -- Smart constructors: Untyped -> Typed
@@ -129,7 +135,7 @@ mkBody (SA atom@(Atom predicate terms) : atoms) = do
   let atomVarList = vars atom
   SB body <- mkBody atoms
   proof <- decWellModedness modedVarList body
-  pure $ SB $ SnocBody body atom proof (atomVarList `append` vars body)
+  pure $ SB $ SnocBody body atom proof (atomVarList SP.%++ vars body)
 
 mkHead :: SomeAtom -> Maybe SomeHead
 mkHead (SA atom@(Atom predicate terms)) =
@@ -148,112 +154,67 @@ instance HasVars (Atom modedVars) where
   vars (Atom _ termList) = keepVars termList
 
 instance HasVars Body where
-  vars EmptyBody                 = HNil
+  vars EmptyBody                 = SP.SNil
   vars (SnocBody _ _ _ bodyVars) = bodyVars
 
 modedVars :: Predicate n modes
-          -> Terms  n terms
+          -> Terms n terms
           -> VarList (ModedVars modes terms)
-modedVars (Predicate _ _ modeList) = go modeList
+modedVars (Predicate _ modeList _) (Terms terms Refl) = go modeList terms
   where
-  go :: Modes n modes -> Terms n terms -> VarList (ModedVars modes terms)
-  go HVNil               HVNil              = HNil
-  go (SMDontCare :=> ms) (_         :=> ts) =        go ms ts
-  go (_          :=> ms) (STLit{}   :=> ts) =        go ms ts
-  go (SMPlus     :=> ms) (STVar var :=> ts) = var :> go ms ts
+  go :: Modes modes -> SP.SList terms -> VarList (ModedVars modes terms)
+  go SP.SNil                    SP.SNil                = SP.SNil
+  go (SMDontCare `SP.SCons` ms) (_      `SP.SCons` ts) =              go ms ts
+  go (_          `SP.SCons` ms) (SSym{} `SP.SCons` ts) =              go ms ts
+  go (SMPlus     `SP.SCons` ms) (SVar v `SP.SCons` ts) = v `SP.SCons` go ms ts
   go _ _ = error "Mode and term list size mismatch"
 
 keepVars :: Terms n terms -> VarList (Vars terms)
-keepVars HVNil               = HNil
-keepVars (STVar v :=> terms) = v :> keepVars terms
-keepVars (STLit{} :=> terms) = keepVars terms
+keepVars (Terms ts _) = go ts
+  where
+  go :: SP.SList terms -> VarList (Vars terms)
+  go SP.SNil                   = SP.SNil
+  go (SVar v `SP.SCons` terms) = v `SP.SCons` go terms
+  go (SSym{} `SP.SCons` terms) =              go terms
 
-type family Vars (terms :: [ Term ]) :: [ Var ] where
-  Vars '[]                       = '[]
-  Vars ('( 'TVar, sym) ': terms) = sym ': Vars terms
-  Vars ('( 'TLit, _)   ': terms) = Vars terms
+type family Vars (terms :: [ Term ]) :: [ Symbol ] where
+  Vars '[]                 = '[]
+  Vars ('Var var ': terms) = var ': Vars terms
+  Vars ('Sym sym ': terms) = Vars terms
 
-type family ModedVars (modes :: [ Mode ]) (terms :: [ Term ]) :: [ Var ] where
-  ModedVars '[]                '[]                    =        '[]
-  ModedVars ('MDontCare ': ms) (_ ': ts)              =        ModedVars ms ts
-  ModedVars (_          ': ms) ('( 'TLit, _)   ': ts) =        ModedVars ms ts
-  ModedVars ('MPlus     ': ms) ('( 'TVar, var) ': ts) = var ': ModedVars ms ts
+type family ModedVars (modes :: [ Mode ]) (terms :: [ Term ]) :: [ Symbol ] where
+  ModedVars '[]                '[]              =        '[]
+  ModedVars ('MDontCare ': ms) (_ ': ts)        =        ModedVars ms ts
+  ModedVars (_          ': ms) ('Sym _   ': ts) =        ModedVars ms ts
+  ModedVars ('MPlus     ': ms) ('Var var ': ts) = var ': ModedVars ms ts
   ModedVars _ _ = TypeError ('Text "Modes and terms are not of equal length.")
-
---------------------------------------------------------------------------------
--- Generic machinery
---------------------------------------------------------------------------------
-
-type family (xs :: [ k ]) :++: (ys :: [ k ]) :: [ k ] where
-  '[]       :++: ys = ys
-  (x ': xs) :++: ys = x ': (xs :++: ys)
-
-infixr 5 :>
-data HList :: (a -> Type) -> [ a ] -> Type where
-  HNil :: HList c '[]
-  (:>) :: HListConstraint a => c a -> HList c as -> HList c (a ': as)
-
-data SomeHList p = forall xs. SHL (HList p xs)
-
-infixr 5 :=>
-data HVect :: Nat -> (a -> Type) -> [ a ] -> Type where
-  HVNil  :: HVect 0 c '[]
-  (:=>)  :: HListConstraint a => c a -> HVect n c as -> HVect (1 + n) c (a ': as)
-
-data SomeHVect n p = forall xs. SHV (HVect n p xs)
-
-class Trivial a
-
-instance Trivial a
-
-type family HListConstraint (a :: k) :: Constraint where
-  HListConstraint (sym :: Symbol)        = KnownSymbol sym
-  HListConstraint ('(term, sym) :: Term) = KnownSymbol sym
-  HListConstraint a                      = Trivial a
-
-append :: HList c m -> HList c n -> HList c (m :++: n)
-HNil      `append` ys = ys
-(x :> xs) `append` ys = x :> (xs `append` ys)
-
-data Dec :: Type -> Type where
-  Yes :: k           -> Dec k
-  No  :: (k -> Void) -> Dec k
-
-data Elem :: [ k ] -> k -> Type where
-  Here  ::              Elem (k ': ks) k
-  There :: Elem ks k -> Elem (a ': ks) k
-
-data All :: (k -> Type) -> [ k ] -> Type where
-  Basic :: All p '[]
-  Next  :: p k -> All p ks -> All p (k ': ks)
-
-type AllElem xs ys = All (Elem ys) xs
 
 --------------------------------------------------------------------------------
 -- Decision procedures
 --------------------------------------------------------------------------------
 
-decElem :: forall var vars. KnownSymbol var
-        => Proxy var -> VarList vars -> Maybe (Elem vars var)
-decElem _ HNil = Nothing
-decElem var (var' :> els) =
-  case sameSymbol var var' of
-    Just Refl -> Just Here
-    Nothing   ->
+decElem :: forall var vars. SP.Sing var -> VarList vars -> Maybe (Elem vars var)
+decElem _ SP.SNil = Nothing
+decElem var (var' `SP.SCons` els) =
+  case var SP.%~ var' of
+    SP.Proved Refl -> Just Here
+    _ ->
       case decElem var els of
         Just elemProof -> Just $ There elemProof
         Nothing        -> Nothing
 
 decAllElem :: VarList vars -> VarList vars' -> Maybe (AllElem vars vars')
-decAllElem HNil _       = Just Basic
-decAllElem (x :> xs) ys =
+decAllElem SP.SNil _    = Just Basic
+decAllElem (x `SP.SCons` xs) ys =
   case (decElem x ys, decAllElem xs ys) of
     (Just el, Just allElem) -> Just $ Next el allElem
     _ -> Nothing
 
-decEmpty :: HList a xs -> Maybe (xs :~: '[])
-decEmpty HNil = Just Refl
-decEmpty _    = Nothing
+decEmpty :: forall (xs :: [ a ]). SP.SDecide a => SP.SList xs -> Maybe (xs :~: '[])
+decEmpty xs =
+  case xs SP.%~ SP.SNil of
+    SP.Proved prf -> Just prf
+    _             -> Nothing
 
 decRangeRestriction :: Head headVars
                     -> Body bodyVars
@@ -270,7 +231,7 @@ decWellModedness :: VarList modedVars
                  -> Maybe (AllElem modedVars bodyVars)
 decWellModedness modedAtomVars body =
   case body of
-    EmptyBody | Refl <- lemEmptyRight (vars body) -> do
+    EmptyBody | Refl <- lemListRightId (vars body) -> do
       Refl <- decEmpty modedAtomVars
       pure Basic
     SnocBody{} -> decAllElem modedAtomVars (vars body)
@@ -279,17 +240,28 @@ decWellModedness modedAtomVars body =
 -- Lemmas
 --------------------------------------------------------------------------------
 
-lemEmptyRight :: HList p xs -> xs :++: '[] :~: xs
-lemEmptyRight HNil                                 = Refl
-lemEmptyRight (_ :> xs) | Refl <- lemEmptyRight xs = Refl
+lemListRightId :: SP.SList xs -> xs SP.++ '[] :~: xs
+lemListRightId SP.SNil                                       = Refl
+lemListRightId (_ `SP.SCons` xs) | Refl <- lemListRightId xs = Refl
 
 --------------------------------------------------------------------------------
 -- Datalog evaluator
 --------------------------------------------------------------------------------
 
-data Substitution (var :: Var) = Substitution (Proxy var) (Proxy Symbol)
+data Substitution     = Substitution Symbol
+data SubstitutionTerm = SubstitutionTerm T.Text T.Text
 
-type Unifier (vars :: [ Var ]) = HList Substitution vars
+data instance SP.Sing (x :: Substitution) where
+  SSubstitution :: SP.SSymbol var -> T.Text
+                -> SP.Sing ('Substitution var)
+
+instance SP.SingKind Substitution where
+  type Demote Substitution = SubstitutionTerm
+  fromSing (SSubstitution var symbol) = SubstitutionTerm (SP.fromSing var) symbol
+  toSing (SubstitutionTerm var symbol) = case SP.toSing var of
+               SP.SomeSing var' -> SP.SomeSing (SSubstitution var' symbol)
+
+-- type Unifier (vars :: [ Symbol ]) = HList Substitution vars
 
 {-
 unify :: Terms n terms -> Tuple n -> Maybe (Unifier (Vars terms))
@@ -306,9 +278,9 @@ substitute = _
 -- Datalog evaluator
 --------------------------------------------------------------------------------
 
-data Tuple n = forall (xs :: [ Symbol ]). T (HVect n Proxy xs)
+data Tuple n = forall (xs :: [ Symbol ]). T (SP.SList xs) (SP.SNat (SP.Length xs))
 
-data Relation = forall n. Relation (SomePredicate n) (S.Set (Tuple n))
+data Relation = forall n. KnownNat n => Relation (SomePredicate n) (S.Set (Tuple n))
 
 newtype Solution = Solution [ Relation ] deriving (Eq)
 
@@ -341,8 +313,8 @@ add rel (Solution rels) = Solution $ go rel rels
   where
   go :: Relation -> [ Relation ] -> [ Relation ]
   go r [] = [ r ]
-  go r1@(Relation (SP (Predicate _ ari1 _)) _)
-    (r2@(Relation (SP (Predicate _ ari2 _)) _) : rs) =
+  go r1@(Relation (SP (Predicate _ _ ari1)) _)
+    (r2@(Relation (SP (Predicate _ _ ari2)) _) : rs) =
     case natVal ari1 `compare` natVal ari2 of
       GT -> r2 : go r1 rs
       EQ -> (r1 <> r2) : rs
@@ -370,73 +342,45 @@ instance Eq Relation where
       all (`elem` tuples2) tuples1
     | otherwise = False
 
-instance Ord (Tuple n) where
-  T HVNil      `compare` T HVNil = EQ
-  T (x :=> xs) `compare` T (y :=> ys) =
-    case symbolVal x `compare` symbolVal y of
-      EQ  -> T xs `compare` T ys
-      cmp -> cmp
-  _ `compare` _ = error "Impossible strikes once again."
+instance KnownNat n => Ord (Tuple n) where
+  T xs _ `compare` T ys _ = SP.fromSing xs `compare` SP.fromSing ys
 
 instance Eq (Tuple n) where
-  T vec1 == T vec2 = go vec1 vec2
-    where
-    go :: forall m (xs :: [ Symbol ]) (ys :: [ Symbol ])
-        . HVect m Proxy xs -> HVect m Proxy ys -> Bool
-    go HVNil      HVNil        = False
-    go (v :=> vs) (v' :=> vs') = isJust (sameSymbol v v') && go vs vs'
-    go _ _ = error "Impossible for tuple vector not to be equal size"
+  T xs _ == T ys _ = SP.fromSing xs == SP.fromSing ys
 
 instance TestEquality SomePredicate where
-  testEquality (SP (Predicate name1 arity1 _))
-               (SP (Predicate name2 arity2 _)) = do
+  testEquality (SP (Predicate name1 _ arity1))
+               (SP (Predicate name2 _ arity2)) = do
     guard (name1 == name2)
-    sameNat arity1 arity2
-
-instance TestEquality p => TestEquality (HList p) where
-  testEquality HNil HNil = Just Refl
-  testEquality (x :> xs) (y :> ys) = do
-    Refl <- x  `testEquality` y
-    Refl <- xs `testEquality` ys
-    pure Refl
-  testEquality _ _ = Nothing
-
-instance TestEquality p => TestEquality (HVect n p) where
-  testEquality HVNil HVNil = Just Refl
-  testEquality (x :=> xs) (y :=> ys) = do
-    Refl <- x  `testEquality` y
-    Refl <- xs `testEquality` ys
-    pure Refl
-  testEquality _ _     = error "Impossible in hetero vector comparison."
+    case arity1 SP.%~ arity2 of
+      SP.Proved prf -> Just prf
+      _ -> Nothing
 
 --------------------------------------------------------------------------------
 -- Tests
 --------------------------------------------------------------------------------
 
 p :: Predicate 2 '[ 'MPlus, 'MDontCare ]
-p = Predicate "p" Proxy (SMPlus :=> SMDontCare :=> HVNil)
+p = Predicate "p" (SMPlus `SP.SCons` SMDontCare `SP.SCons` SP.SNil) SP.SNat
 
 easy :: Predicate 1 '[ 'MDontCare ]
-easy = Predicate "easy" Proxy (SMDontCare :=> HVNil)
+easy = Predicate "easy" (SMDontCare `SP.SCons` SP.SNil)  SP.SNat
 
 someEasy :: SomeAtom
-someEasy = SA $ Atom easy (STVar (Proxy @"X") :=> HVNil)
+someEasy = SA $ Atom easy (Terms (SVar (SP.sing @"X") `SP.SCons` SP.SNil) Refl)
 
 groundP :: Atom '[] '[ "X" ]
-groundP = Atom p (STLit (Proxy @"Mistral") :=> STVar (Proxy @"X") :=> HVNil)
-
-{- We can't even construct the following because the type signature says no
-    moded vars.
-
-groundP :: Atom '[] '[]
-groundP = Atom p (STVar (Proxy @"Mistral") :> STLit (Proxy @"Contrastin") :> INil)
--}
+groundP = Atom p $ Terms
+  (SSym (SP.sing @"Mistral") `SP.SCons` SVar (SP.sing @"X") `SP.SCons` SP.SNil)
+  Refl
 
 someGroundP :: SomeAtom
 someGroundP = SA groundP
 
 modedP :: Atom '[ "X" ] '[ "X", "Y" ]
-modedP = Atom p (STVar (Proxy @"X") :=> STVar (Proxy @"Y") :=> HVNil)
+modedP = Atom p $ Terms
+  (SVar (SP.sing @"X") `SP.SCons` SVar (SP.sing @"Y") `SP.SCons` SP.SNil)
+  Refl
 
 someModedP :: SomeAtom
 someModedP = SA modedP
