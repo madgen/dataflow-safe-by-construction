@@ -252,9 +252,11 @@ lemListRightId (_ `SP.SCons` xs) | Refl <- lemListRightId xs = Refl
 data Substitution     = Substitution Symbol
 data SubstitutionTerm = SubstitutionTerm T.Text T.Text
 
-data instance SP.Sing (x :: Substitution) where
+data instance SP.Sing :: Substitution -> Type where
   SSubstitution :: SP.SSymbol var -> T.Text
                 -> SP.Sing ('Substitution var)
+
+type SSubstitution (x :: Substitution) = SP.Sing x
 
 instance SP.SingKind Substitution where
   type Demote Substitution = SubstitutionTerm
@@ -262,10 +264,16 @@ instance SP.SingKind Substitution where
   toSing (SubstitutionTerm var symbol) = case SP.toSing var of
                SP.SomeSing var' -> SP.SomeSing (SSubstitution var' symbol)
 
--- type Unifier (vars :: [ Symbol ]) = HList Substitution vars
+type Unifier (substs :: [ Substitution ]) = SP.SList substs
+
+type family Map (f :: k -> l) (xs :: [ k ]) :: [ l ] where
+  Map f '[]       = '[]
+  Map f (x ': xs) = f x ': Map f xs
+
+type UnifierVars (terms :: [ Term ]) = Map 'Substitution (Vars terms)
 
 {-
-unify :: Terms n terms -> Tuple n -> Maybe (Unifier (Vars terms))
+unify :: Terms n terms -> Tuple n -> Maybe (Unifier (UnifierVars terms))
 unify = _
 
 findUnifiers :: Atom modedVars vars -> Solution -> S.Set (Unifier vars)
