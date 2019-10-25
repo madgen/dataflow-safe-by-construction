@@ -55,8 +55,7 @@ data instance SP.Sing (x :: Term) where
 
 type STerm (x :: Term) = SP.Sing x
 
-data Terms (n :: Nat) (terms :: [ Term ]) =
-  Terms (SP.SList terms) (SP.Length terms :~: n)
+type Terms (terms :: [ Term ]) = SP.SList terms
 
 type VarList (vars :: [ Symbol ]) = SP.SList vars
 
@@ -78,7 +77,8 @@ data SomePredicate (n :: Nat) = forall modes.
 
 data Atom :: [ Symbol ] -> [ Symbol ] -> Type where
   Atom :: Predicate n modes
-       -> Terms n terms
+       -> Terms terms
+       -> SP.Length terms :~: n
        -> Atom (ModedVars modes terms) (Vars terms)
 
 data SomeAtom = forall vars modedVars. SA (Atom modedVars vars)
@@ -131,7 +131,7 @@ mkClause  someHead bodyAtoms = do
 
 mkBody :: [ SomeAtom ] -> Maybe SomeBody
 mkBody [] = Just $ SB EmptyBody
-mkBody (SA atom@(Atom predicate terms) : atoms) = do
+mkBody (SA atom@(Atom predicate terms Refl) : atoms) = do
   let modedVarList = modedVars predicate terms
   let atomVarList = vars atom
   SB body <- mkBody atoms
@@ -139,7 +139,7 @@ mkBody (SA atom@(Atom predicate terms) : atoms) = do
   pure $ SB $ SnocBody body atom proof (atomVarList SP.%++ vars body)
 
 mkHead :: SomeAtom -> Maybe SomeHead
-mkHead (SA atom@(Atom predicate terms)) =
+mkHead (SA atom@(Atom predicate terms Refl)) =
   case decEmpty (modedVars predicate terms) of
     Just Refl -> Just $ SH atom
     Nothing   -> Nothing
@@ -152,16 +152,16 @@ class HasVars f where
   vars :: f vars -> VarList vars
 
 instance HasVars (Atom modedVars) where
-  vars (Atom _ termList) = keepVars termList
+  vars (Atom _ termList Refl) = keepVars termList
 
 instance HasVars Body where
   vars EmptyBody                 = SP.SNil
   vars (SnocBody _ _ _ bodyVars) = bodyVars
 
 modedVars :: Predicate n modes
-          -> Terms n terms
+          -> Terms terms
           -> VarList (ModedVars modes terms)
-modedVars (Predicate _ modeList _) (Terms terms Refl) = go modeList terms
+modedVars (Predicate _ modeList _) terms = go modeList terms
   where
   go :: Modes modes -> SP.SList terms -> VarList (ModedVars modes terms)
   go SP.SNil                    SP.SNil                = SP.SNil
@@ -170,13 +170,10 @@ modedVars (Predicate _ modeList _) (Terms terms Refl) = go modeList terms
   go (SMPlus     `SP.SCons` ms) (SVar v `SP.SCons` ts) = v `SP.SCons` go ms ts
   go _ _ = error "Mode and term list size mismatch"
 
-keepVars :: Terms n terms -> VarList (Vars terms)
-keepVars (Terms ts _) = go ts
-  where
-  go :: SP.SList terms -> VarList (Vars terms)
-  go SP.SNil                   = SP.SNil
-  go (SVar v `SP.SCons` terms) = v `SP.SCons` go terms
-  go (SSym{} `SP.SCons` terms) =              go terms
+keepVars :: Terms terms -> VarList (Vars terms)
+keepVars SP.SNil                   = SP.SNil
+keepVars (SVar v `SP.SCons` terms) = v `SP.SCons` keepVars terms
+keepVars (SSym{} `SP.SCons` terms) =              keepVars terms
 
 type family Vars (terms :: [ Term ]) :: [ Symbol ] where
   Vars '[]                 = '[]
@@ -376,20 +373,16 @@ easy :: Predicate 1 '[ 'MDontCare ]
 easy = Predicate "easy" (SMDontCare `SP.SCons` SP.SNil)  SP.SNat
 
 someEasy :: SomeAtom
-someEasy = SA $ Atom easy (Terms (SVar (SP.sing @"X") `SP.SCons` SP.SNil) Refl)
+someEasy = SA $ Atom easy (SVar (SP.sing @"X") `SP.SCons` SP.SNil) Refl
 
 groundP :: Atom '[] '[ "X" ]
-groundP = Atom p $ Terms
-  (SSym (SP.sing @"Mistral") `SP.SCons` SVar (SP.sing @"X") `SP.SCons` SP.SNil)
-  Refl
+groundP = Atom p (SSym (SP.sing @"42") `SP.SCons` SVar (SP.sing @"X") `SP.SCons` SP.SNil) Refl
 
 someGroundP :: SomeAtom
 someGroundP = SA groundP
 
 modedP :: Atom '[ "X" ] '[ "X", "Y" ]
-modedP = Atom p $ Terms
-  (SVar (SP.sing @"X") `SP.SCons` SVar (SP.sing @"Y") `SP.SCons` SP.SNil)
-  Refl
+modedP = Atom p (SVar (SP.sing @"X") `SP.SCons` SVar (SP.sing @"Y") `SP.SCons` SP.SNil) Refl
 
 someModedP :: SomeAtom
 someModedP = SA modedP
