@@ -9,7 +9,10 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE PartialTypeSignatures #-}
 
 module DataflowSafety where
 
@@ -19,7 +22,7 @@ import Control.Monad (forM_, guard)
 
 import qualified Data.Text as T
 import           Data.Kind (Type)
-import           Data.Maybe (isJust)
+import           Data.Maybe (isJust, fromJust)
 import qualified Data.Set as S
 import           Data.Type.Equality
 
@@ -35,6 +38,10 @@ import GHC.TypeLits
 -- Generic machinery
 --------------------------------------------------------------------------------
 
+type family Map (f :: k -> l) (as :: [ k ]) :: [ l ]  where
+  Map f '[] = '[]
+  Map f (a ': as) = f a ': Map f as
+
 data Elem :: [ k ] -> k -> Type where
   Here  ::              Elem (k ': ks) k
   There :: Elem ks k -> Elem (a ': ks) k
@@ -43,7 +50,7 @@ data All :: (k -> Type) -> [ k ] -> Type where
   Basic :: All p '[]
   Next  :: p k -> All p ks -> All p (k ': ks)
 
-type AllElem (xs :: [ k ]) (ys :: [ k ]) = All (Elem ys) xs
+type Subseteq (xs :: [ k ]) (ys :: [ k ]) = All (Elem ys) xs
 
 -- ## Term
 
@@ -76,7 +83,8 @@ data SomePredicate (n :: Nat) = forall modes.
 -- ## Atom
 
 data Atom :: [ Symbol ] -> [ Symbol ] -> Type where
-  Atom :: Predicate n modes
+  Atom :: KnownNat n
+       => Predicate n modes
        -> Terms terms
        -> SP.Length terms :~: n
        -> Atom (ModedVars modes terms) (Vars terms)
@@ -98,7 +106,7 @@ data Body :: [ Symbol ] -> Type where
   SnocBody  :: Body bodyVars
             -> Atom modedVars atomVars
             -- | Well-modedness
-            -> AllElem modedVars bodyVars
+            -> Subseteq modedVars bodyVars
             -- | All body variables
             -> VarList (atomVars SP.++ bodyVars)
             -> Body (atomVars SP.++ bodyVars)
@@ -111,7 +119,7 @@ data Clause :: Type where
   Clause :: Head headVars
          -> Body bodyVars
          -- | Range restriction
-         -> AllElem headVars bodyVars
+         -> Subseteq headVars bodyVars
          -> Clause
 
 -- ## Program
@@ -204,11 +212,11 @@ decElem x (y `SP.SCons` ys) =
     SP.Proved Refl -> Just Here
     _              -> There <$> decElem x ys
 
-decAllElem :: forall (xs :: [ k ]) (ys :: [ k ])
+decSubseteq :: forall (xs :: [ k ]) (ys :: [ k ])
             . SP.SDecide k
-           => SP.SList xs -> SP.SList ys -> Maybe (AllElem xs ys)
-decAllElem SP.SNil           _  = Just Basic
-decAllElem (x `SP.SCons` xs) ys = Next <$> decElem x ys <*> decAllElem xs ys
+           => SP.SList xs -> SP.SList ys -> Maybe (Subseteq xs ys)
+decSubseteq SP.SNil           _  = Just Basic
+decSubseteq (x `SP.SCons` xs) ys = Next <$> decElem x ys <*> decSubseteq xs ys
 
 decEmpty :: forall (xs :: [ k ])
           . SP.SDecide k
@@ -217,22 +225,22 @@ decEmpty xs = fromDecision $ xs SP.%~ SP.SNil
 
 decRangeRestriction :: Head headVars
                     -> Body bodyVars
-                    -> Maybe (AllElem headVars bodyVars)
+                    -> Maybe (Subseteq headVars bodyVars)
 decRangeRestriction atom = \case
   EmptyBody -> do
     Refl <- decEmpty $ vars atom
     pure Basic
-  SnocBody _ _ _ bodyVars -> decAllElem (vars atom) bodyVars
+  SnocBody _ _ _ bodyVars -> decSubseteq (vars atom) bodyVars
 
 decWellModedness :: VarList modedVars
                  -> Body bodyVars
-                 -> Maybe (AllElem modedVars bodyVars)
+                 -> Maybe (Subseteq modedVars bodyVars)
 decWellModedness modedAtomVars body =
   case body of
     EmptyBody | Refl <- lemListRightId (vars body) -> do
       Refl <- decEmpty modedAtomVars
       pure Basic
-    SnocBody{} -> decAllElem modedAtomVars (vars body)
+    SnocBody{} -> decSubseteq modedAtomVars (vars body)
 
 --------------------------------------------------------------------------------
 -- Lemmas
@@ -247,7 +255,7 @@ lemListRightId (_ `SP.SCons` xs) | Refl <- lemListRightId xs = Refl
 --------------------------------------------------------------------------------
 
 data Substitution     = Substitution Symbol
-data SubstitutionTerm = SubstitutionTerm T.Text T.Text
+data SubstitutionTerm = SubstitutionTerm T.Text T.Text deriving (Eq, Ord)
 
 data instance SP.Sing :: Substitution -> Type where
   SSubstitution :: SP.SSymbol var -> T.Text
@@ -263,20 +271,49 @@ instance SP.SingKind Substitution where
 
 type Unifier (substs :: [ Substitution ]) = SP.SList substs
 
-type family Map (f :: k -> l) (xs :: [ k ]) :: [ l ] where
-  Map f '[]       = '[]
-  Map f (x ': xs) = f x ': Map f xs
+instance Eq (Unifier xs) where
+  u == v = SP.fromSing u == SP.fromSing v
 
-type UnifierVars (terms :: [ Term ]) = Map 'Substitution (Vars terms)
+instance Ord (Unifier xs) where
+  u `compare` v = SP.fromSing u `compare` SP.fromSing v
+
+type UnifierSubsts (terms :: [ Term ]) = Map 'Substitution (Vars terms)
+
+unify :: Terms terms
+      -> Tuple n
+      -> Maybe (Unifier (UnifierSubsts terms))
+unify xs (T ys SP.SNat) = go xs ys
+  where
+  go :: forall (xs :: [ Term ]) (ys :: [ Symbol ])
+      . SP.SList xs -> SP.SList ys -> Maybe (SP.SList (UnifierSubsts xs))
+  go SP.SNil SP.SNil = Just SP.SNil
+  go (SSym s' `SP.SCons` ts) (s `SP.SCons` ss)
+    | SP.Proved Refl <- s' SP.%~ s = go ts ss
+    | otherwise                    = Nothing
+  go (SVar v `SP.SCons` ts) (s `SP.SCons` ss) = do
+    partialUnifier <- go ts ss
+    guard $ consistent v s partialUnifier
+    -- The extension to the partial unifier might be redundant if $(v,s)$ is
+    -- already in $partialUnifier$, but it simplifies the types.
+    pure $ SSubstitution SP.SSym (SP.fromSing s) `SP.SCons` partialUnifier
+  go _ _ = error
+    "Impossible. Trying to unify a tuple and terms that do not match in size."
+
+consistent :: SP.SSymbol var -> SP.SSymbol sym -> Unifier substs -> Bool
+consistent _ _ SP.SNil = True
+consistent svar ssym (SSubstitution svar' sym' `SP.SCons` substs) =
+  case (svar SP.%~ svar', SP.fromSing ssym == sym') of
+    (SP.Proved _, False) -> False
+    _                    -> consistent svar ssym substs
+
+findUnifiers :: Atom modedVars vars -> Solution -> S.Set (Unifier (Map 'Substitution vars))
+findUnifiers (Atom predicate terms _) solution =
+  case predicate `solLookup` solution of
+    Just tuples -> S.map fromJust . S.filter isJust . S.map (unify terms) $ tuples
+    Nothing     -> S.empty
 
 {-
-unify :: Terms n terms -> Tuple n -> Maybe (Unifier (UnifierVars terms))
-unify = _
-
-findUnifiers :: Atom modedVars vars -> Solution -> S.Set (Unifier vars)
-findUnifiers = _
-
-substitute :: Atom modedVars vars -> Unifier vars' ->  Atom modedVars (vars \\ vars')
+substitute :: Atom modedVars vars -> Unifier vars' -> Atom (modedVars \\ vars') (vars \\ vars')
 substitute = _
 -}
 
@@ -289,6 +326,18 @@ data Tuple n = forall (xs :: [ Symbol ]). T (SP.SList xs) (SP.SNat (SP.Length xs
 data Relation = forall n. KnownNat n => Relation (SomePredicate n) (S.Set (Tuple n))
 
 newtype Solution = Solution [ Relation ] deriving (Eq)
+
+solLookup :: forall n modes. KnownNat n => Predicate n modes -> Solution -> Maybe (S.Set (Tuple n))
+solLookup pred (Solution rels) = go rels
+  where
+  sPred :: SomePredicate n
+  sPred = SP pred
+
+  go :: [ Relation ] -> Maybe (S.Set (Tuple n))
+  go [] = Nothing
+  go (Relation pred' tuples : rs)
+    | Just Refl <- sPred `testEquality` pred' = Just tuples
+    | otherwise = go rs
 
 {-
 step :: Solution -> Clause -> Relation
