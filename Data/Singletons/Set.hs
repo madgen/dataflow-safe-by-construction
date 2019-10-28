@@ -18,7 +18,9 @@
 module Data.Singletons.Set
   ( Set
   , SSet
-    -- * Type-level operations
+  , pattern SEmpty
+  , pattern (:>)
+    -- * Type-level functions and relations
   , type UnSet
   , type Empty
   , type In
@@ -28,11 +30,18 @@ module Data.Singletons.Set
   , type Delete
   , type (\\)
   , type AllR
+  , pattern Basic
+  , pattern Next
   , type ElemR
+  , pattern Here
+  , pattern There
   , type Subseteq
-    -- * Singletons
-  , pattern SEmpty
-  , pattern (:>)
+  , type Map
+    -- * Properties
+  , lemSetRightId
+    -- * Decision procedures
+  , decElem
+  , decEmpty
   , decSubseteq
   ) where
 
@@ -76,9 +85,22 @@ type family (set1 :: Set k) \\ (set2 :: Set k) :: Set k where
 
 type AllR (p :: k -> Type) (xs :: [ k ]) = L.AllR p xs
 
+pattern Basic :: AllR p Empty
+pattern Basic = L.Basic
+
+pattern Next  :: p el -> AllR p set -> AllR p (Add el set)
+pattern Next el prf = L.Next el prf
+
 type ElemR (xs :: [ k ]) (x :: k) = L.ElemR xs x
 
+pattern Here :: ElemR (Add el set) el
+pattern Here = L.Here
+pattern There :: ElemR set el -> ElemR (Add el' set)el 
+pattern There prf = L.There prf
+
 type Subseteq xs ys = L.Subseteq xs ys
+
+type Map (f :: k -> l) (xs :: Set k) = L.Map' f xs
 
 --------------------------------------------------------------------------------
 -- Singletons
@@ -96,8 +118,23 @@ pattern (:>) x xs = x `L.SCons` xs
 {-# COMPLETE (:>), SEmpty #-}
 
 --------------------------------------------------------------------------------
+-- Properties
+--------------------------------------------------------------------------------
+
+lemSetRightId :: SSet set -> Union set Empty :~: set
+lemSetRightId = L.lemListRightId
+
+--------------------------------------------------------------------------------
 -- Decision procedures
 --------------------------------------------------------------------------------
+
+decElem :: forall (el :: k) (set :: Set k)
+         . SDecide k
+        => L.Sing el -> L.SList set -> Maybe (ElemR set el)
+decElem = L.decElem
+
+decEmpty :: forall (xs :: Set k). SDecide k => SSet xs -> Maybe (xs :~: Empty)
+decEmpty = L.decEmpty
 
 decSubseteq :: forall (set1 :: Set k) (set2 :: Set k)
             . SDecide k
