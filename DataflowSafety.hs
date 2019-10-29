@@ -236,10 +236,8 @@ instance Eq (Unifier xs) where
 instance Ord (Unifier xs) where
   u `compare` v = SP.fromSing u `compare` SP.fromSing v
 
-unify :: Terms terms
-      -> Tuple n
-      -> Maybe (Unifier (Substs (GetVars terms)))
-unify xs (T ys SP.SNat) = go xs ys
+unify :: Atom modedVars pureVars -> Tuple n -> Maybe (Unifier (Substs pureVars))
+unify (Atom _ terms Refl) (T syms SP.SNat) = go terms syms
   where
   go :: forall (xs :: [ Term ]) (ys :: [ Symbol ])
       . SP.SList xs -> SP.SList ys -> Maybe (SP.SList (Substs (GetVars xs)))
@@ -263,10 +261,10 @@ consistent svar ssym (SSubst svar' sym' `SP.SCons` substs) =
     (SP.Proved _, False) -> False
     _                    -> consistent svar ssym substs
 
-findUnifiers :: Atom modedVars vars -> Solution -> S.Set (Unifier (Substs vars))
-findUnifiers (Atom predicate terms _) solution =
+findUnifiers :: Atom modedVars pureVars -> Solution -> S.Set (Unifier (Substs pureVars))
+findUnifiers atom@(Atom predicate _ _) solution =
   case predicate `solLookup` solution of
-    Just tuples -> S.map fromJust . S.filter isJust . S.map (unify terms) $ tuples
+    Just tuples -> S.map fromJust . S.filter isJust . S.map (unify atom) $ tuples
     Nothing     -> S.empty
 
 data Substituted terms modes substs = forall terms'. Substituted
