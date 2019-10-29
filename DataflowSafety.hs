@@ -28,7 +28,8 @@ import           Data.Type.Equality
 
 import           Data.Singletons.Set
 import qualified Data.Singletons.Prelude      as SP
-import qualified Data.Singletons.Prelude.List as L
+import qualified Data.Singletons.Prelude.List        as L
+import qualified Data.Singletons.Prelude.List.Extras as L
 import qualified Data.Singletons.TypeLits     as SP
 import qualified Data.Singletons.Decide       as SP
 import           Data.Singletons.TH (singletons)
@@ -154,7 +155,7 @@ modedVars (Predicate _ modeList _) = go modeList
   where
   go :: Modes modes -> Terms terms -> Vars (ModedVars modes terms)
   go SP.SNil                    SP.SNil                = SP.SNil
-  go (SMDontCare `SP.SCons` ms) (_      `SP.SCons` ts) =              go ms ts
+  go (SMDontCare `SP.SCons` ms) (SVar{} `SP.SCons` ts) =              go ms ts
   go (_          `SP.SCons` ms) (SSym{} `SP.SCons` ts) =              go ms ts
   go (SMPlus     `SP.SCons` ms) (SVar v `SP.SCons` ts) = v `SP.SCons` go ms ts
   go _ _ = error "Mode and term list size mismatch"
@@ -171,7 +172,7 @@ type family GetVars (terms :: [ Term ]) :: Set Symbol where
 
 type family ModedVars (modes :: [ Mode ]) (terms :: [ Term ]) :: Set Symbol where
   ModedVars '[]                '[]              = Empty
-  ModedVars ('MDontCare ': ms) (_ ': ts)        =         ModedVars ms ts
+  ModedVars ('MDontCare ': ms) ('Var _   ': ts) =         ModedVars ms ts
   ModedVars (_          ': ms) ('Sym _   ': ts) =         ModedVars ms ts
   ModedVars ('MPlus     ': ms) ('Var var ': ts) = Add var (ModedVars ms ts)
   ModedVars _ _ = TypeError ('Text "Modes and terms are not of equal length.")
@@ -206,7 +207,15 @@ decWellModedness modedAtomVars body =
 newtype Substitution  = Subst Symbol
 data SubstitutionTerm = SubstTerm T.Text T.Text deriving (Eq, Ord)
 
-type Substs (vars :: [ Symbol ]) = Map 'Subst vars
+type Substs (vars :: Set Symbol) = Map 'Subst vars
+
+type family UnSubsts (substs :: Set Substitution) :: Set Symbol where
+  UnSubsts Empty                  = Empty
+  UnSubsts ('Subst var ': substs) = Add var (UnSubsts substs)
+
+unifierDom :: SSet substs -> SSet (UnSubsts substs)
+unifierDom SEmpty                         = SEmpty
+unifierDom (SSubst var _ `SP.SCons` rest) = var :> unifierDom rest
 
 data instance SP.Sing :: Substitution -> Type where
   SSubst :: SP.SSymbol var -> T.Text -> SP.Sing ('Subst var)
@@ -260,10 +269,47 @@ findUnifiers (Atom predicate terms _) solution =
     Just tuples -> S.map fromJust . S.filter isJust . S.map (unify terms) $ tuples
     Nothing     -> S.empty
 
-{-
-substitute :: Atom modedVars vars -> Unifier vars' -> Atom (modedVars \\ vars') (vars \\ vars')
-substitute = _
--}
+data Substituted terms modes substs = forall terms'. Substituted
+  (Terms terms')
+  (ModedVars modes terms' :~: ModedVars modes terms \\ UnSubsts substs)
+  (GetVars terms' :~: GetVars terms \\ UnSubsts substs)
+  (L.Length terms :~: L.Length terms')
+
+decElemUnifier :: SP.SSymbol var -> Unifier substs -> Maybe (ElemR (UnSubsts substs) var)
+decElemUnifier var unifier = var `decElem` unifierDom unifier
+
+lookupSym :: ElemR (UnSubsts substs) var -> Unifier substs -> T.Text
+lookupSym _ SEmpty = error "Unreachable."
+lookupSym (L.There el) (SSubst{} `SP.SCons` unifier) = el `lookupSym` unifier
+lookupSym L.Here (SSubst _ symbol `SP.SCons` _) = symbol
+
+  {-
+
+substitute :: forall modedVars vars substs
+            . Atom modedVars vars
+           -> Unifier substs
+           -> Atom (modedVars \\ UnSubsts substs) (vars \\ UnSubsts substs)
+substitute (Atom predicate@(Predicate _ modes _) terms Refl) unifier
+  | Substituted terms' Refl Refl Refl <- go modes terms = Atom predicate terms' Refl
+  where
+  go :: forall modes terms terms'
+      . Modes modes
+     -> Terms terms
+     -> Substituted terms modes substs
+  go SP.SNil SP.SNil = Substituted SP.SNil Refl Refl Refl
+  go (SMDontCare `SP.SCons` ms) (t@(SVar var) `SP.SCons` ts)
+    | Substituted rest prf1 prf2 Refl <- go ms ts =
+      case decElemUnifier var unifier of
+        Just elem | SP.SomeSing ssym <- SP.toSing (elem `lookupSym` unifier) ->
+          Substituted (SSym ssym `SP.SCons` rest) prf1 prf2 Refl
+        Nothing ->
+          Substituted (t `SP.SCons` rest) prf1 prf2 Refl
+  go (_ `SP.SCons` ms) (t@SSym{} `SP.SCons` ts)
+    | Substituted rest prf1 prf2 Refl <- go ms ts = Substituted (t `SP.SCons` rest) prf1 prf2 Refl
+  go (SMPlus `SP.SCons` ms) (t@(SVar var) `SP.SCons` ts)
+    | Substituted rest prf1 prf2 Refl <- go ms ts = Substituted (t `SP.SCons` rest) prf1 prf2 Refl
+
+  -}
 
 --------------------------------------------------------------------------------
 -- Datalog evaluator
