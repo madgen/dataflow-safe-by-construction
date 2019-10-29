@@ -33,8 +33,6 @@ module Data.Singletons.Set
   , pattern Basic
   , pattern Next
   , type ElemR
-  , pattern Here
-  , pattern There
   , type Subseteq
   , type Map
     -- * Properties
@@ -81,7 +79,7 @@ type family Delete (el :: k) (set :: Set k) :: Set k where
 
 type family (set1 :: Set k) \\ (set2 :: Set k) :: Set k where
   set1 \\ '[]         = set1
-  set1 \\ (el ': els) = (Delete el set1) \\ els
+  set1 \\ (el ': els) = Delete el (set1 \\ els)
 
 type AllR (p :: k -> Type) (xs :: [ k ]) = L.AllR p xs
 
@@ -92,11 +90,6 @@ pattern Next  :: p el -> AllR p set -> AllR p (Add el set)
 pattern Next el prf = L.Next el prf
 
 type ElemR (xs :: [ k ]) (x :: k) = L.ElemR xs x
-
-pattern Here :: ElemR (Add el set) el
-pattern Here = L.Here
-pattern There :: ElemR set el -> ElemR (Add el' set)el 
-pattern There prf = L.There prf
 
 type Subseteq xs ys = L.Subseteq xs ys
 
