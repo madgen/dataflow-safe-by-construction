@@ -240,7 +240,7 @@ unify :: Atom modedVars pureVars -> Tuple n -> Maybe (Unifier (Substs pureVars))
 unify (Atom _ terms Refl) (T syms SP.SNat) = go terms syms
   where
   go :: forall (xs :: [ Term ]) (ys :: [ Symbol ])
-      . SP.SList xs -> SP.SList ys -> Maybe (SP.SList (Substs (GetVars xs)))
+      . L.SList xs -> L.SList ys -> Maybe (L.SList (Substs (GetVars xs)))
   go SP.SNil SP.SNil = Just SP.SNil
   go (SSym s' `SP.SCons` ts) (s `SP.SCons` ss)
     | SP.Proved Refl <- s' SP.%~ s = go ts ss
@@ -313,7 +313,7 @@ substitute (Atom predicate@(Predicate _ modes _) terms Refl) unifier
 -- Datalog evaluator
 --------------------------------------------------------------------------------
 
-data Tuple n = forall (xs :: [ Symbol ]). T (SP.SList xs) (SP.SNat (L.Length xs))
+data Tuple n = forall (xs :: [ Symbol ]). T (L.SList xs) (SP.SNat (L.Length xs))
 
 data Relation = forall n. KnownNat n => Relation (SomePredicate n) (S.Set (Tuple n))
 
@@ -335,7 +335,20 @@ solLookup pred (Solution rels) = go rels
 
 {-
 step :: Solution -> Clause -> Relation
-step solution clause = _
+step solution (Clause head body rangeRestriction) = S.map (walkBody body) $ \unifier ->
+  case deriveHead head unifier of
+    Atom predicate terms sizePrf -> Relation predicate (fromHead terms sizePrf)
+  where
+  walkBody :: forall pureVars. Body pureVars -> S.Set (Unifier pureVars)
+  walkBody EmptyBody = S.singleton L.SNil
+  walkBody (SnocBody body atom _ _) = S.unions $ (`S.map` go body) $ \unifier ->
+    findUnifiers (substitute atom unifier) solution
+
+  deriveHead :: Head vars -> Unifier vars' -> SubsetEq vars vars' -> Head '[]
+  deriveHead head unifier subseteq = substitute head unifier
+
+  fromHead :: Terms terms -> n :~: L.Length terms -> Tuples n
+  fromHead = _
 
 round :: Program -> Solution -> Solution
 round program solution = mconcat (map (singleton . step solution) program)
