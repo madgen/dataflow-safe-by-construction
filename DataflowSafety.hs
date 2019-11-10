@@ -1,6 +1,7 @@
 {-# OPTIONS_GHC -fplugin GHC.TypeLits.Normalise #-}
 
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE EmptyCase #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
@@ -8,11 +9,14 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE PartialTypeSignatures #-}
+{-# LANGUAGE TypeFamilyDependencies #-}
 
 module DataflowSafety where
 
@@ -25,6 +29,7 @@ import           Data.Kind (Type)
 import           Data.Maybe (isJust, fromJust)
 import qualified Data.Set as S
 import           Data.Type.Equality
+import           Data.Void (absurd)
 
 import           Data.Singletons.Set
 import qualified Data.Singletons.Prelude      as SP
@@ -32,7 +37,7 @@ import qualified Data.Singletons.Prelude.List        as L
 import qualified Data.Singletons.Prelude.List.Extras as L
 import qualified Data.Singletons.TypeLits     as SP
 import qualified Data.Singletons.Decide       as SP
-import           Data.Singletons.TH (singletons)
+import           Data.Singletons.TH
 
 import GHC.TypeLits
 
@@ -48,12 +53,12 @@ type STerm (x :: Term) = SP.Sing x
 
 type Terms (terms :: [ Term ]) = L.SList terms
 
-type Vars (vars :: Set Symbol) = SSet vars
+type Vars (vars :: [ Symbol ]) = L.SList vars
 
 -- ## Predicate
 
 $(singletons [d|
-  data Mode = MPlus | MDontCare
+  data Mode = MPlus | MDontCare deriving (Eq)
   |])
 
 type Modes (modes :: [ Mode ]) = L.SList modes
@@ -66,44 +71,44 @@ data SomePredicate (n :: Nat) = forall modes.
 
 -- ## Atom
 
-data Atom :: Set Symbol -> Set Symbol -> Type where
+data Atom :: Set Term -> Set Mode -> Type where
   Atom :: KnownNat n
        => Predicate n modes
        -> Terms terms
        -> L.Length terms :~: n
-       -> Atom (ModedVars modes terms) (GetVars terms)
+       -> Atom terms modes
 
-data SomeAtom = forall vars modedVars. SA (Atom modedVars vars)
+data SomeAtom = forall terms modes. SA (Atom terms modes)
 
 -- ## Head
 
 -- | Clause heads shouldn't have moded predicates, hence they don't have moded
 -- variables.
-type Head headVars = Atom '[] headVars
+type Head terms = Atom terms '[]
 
-data SomeHead = forall vars . SH (Head vars)
+data SomeHead = forall terms . SH (Head terms)
 
 -- ## Body
 
 data Body :: [ Symbol ] -> Type where
   EmptyBody :: Body '[]
   SnocBody  :: Body bodyVars
-            -> Atom modedVars atomVars
+            -> Atom terms modes
             -- | Well-modedness
-            -> Subseteq modedVars bodyVars
+            -> Subseteq (ModedVars terms modes) bodyVars
             -- | All body variables
-            -> Vars (Union atomVars bodyVars)
-            -> Body (Union atomVars bodyVars)
+            -> Vars (Union (Difference (AllVars terms) bodyVars) bodyVars)
+            -> Body (Union (Difference (AllVars terms) bodyVars) bodyVars)
 
 data SomeBody = forall bodyVars. SB (Body bodyVars)
 
 -- ## Clause
 
 data Clause :: Type where
-  Clause :: Head headVars
+  Clause :: Head terms
          -> Body bodyVars
          -- | Range restriction
-         -> Subseteq headVars bodyVars
+         -> Subseteq (AllVars terms) bodyVars
          -> Clause
 
 -- ## Program
@@ -123,16 +128,16 @@ mkClause  someHead bodyAtoms = do
 
 mkBody :: [ SomeAtom ] -> Maybe SomeBody
 mkBody [] = Just $ SB EmptyBody
-mkBody (SA atom@(Atom predicate terms Refl) : atoms) = do
-  let modedVarList = modedVars predicate terms
-  let atomVarList = vars atom
+mkBody (SA atom : atoms) = do
   SB body <- mkBody atoms
-  proof <- decWellModedness modedVarList body
-  pure $ SB $ SnocBody body atom proof (atomVarList SP.%++ vars body)
+  let aVars = allVars atom
+  let bVars = bodyVars body
+  proof <- decWellModedness (modedVars atom) body
+  pure $ SB $ SnocBody body atom proof ((aVars `sDifference` bVars) SP.%++ vars body)
 
 mkHead :: SomeAtom -> Maybe SomeHead
-mkHead (SA atom@(Atom predicate terms Refl)) =
-  case decEmpty (modedVars predicate terms) of
+mkHead (SA atom@(Atom (Predicate _ modes _) _ Refl)) =
+  case decEmpty modes of
     Just Refl -> Just $ SH atom
     Nothing   -> Nothing
 
@@ -143,52 +148,62 @@ mkHead (SA atom@(Atom predicate terms Refl)) =
 class HasVars f where
   vars :: f vars -> Vars vars
 
-instance HasVars (Atom modedVars) where
-  vars (Atom _ termList Refl) = keepVars termList
-
 instance HasVars Body where
   vars EmptyBody                 = SP.SNil
   vars (SnocBody _ _ _ bodyVars) = bodyVars
 
-modedVars :: Predicate n modes -> Terms terms -> Vars (ModedVars modes terms)
-modedVars (Predicate _ modeList _) = go modeList
+type family ModedVars (terms :: [ Term ]) (modes :: [ Mode ]) :: Set Symbol where
+  ModedVars '[]              '[]                = Empty
+  ModedVars ('Var _   ': ts) ('MDontCare ': ms) =         ModedVars ts ms
+  ModedVars ('Sym _   ': ts) ( _         ': ms) =         ModedVars ts ms
+  ModedVars ('Var var ': ts) ('MPlus     ': ms) = Add var (ModedVars ts ms)
+  ModedVars _ _ = TypeError ('Text "Modes and terms are not of equal length.")
+
+modedVars :: Atom terms modes -> Vars (ModedVars terms modes)
+modedVars (Atom (Predicate _ modes _) terms _) = go terms modes
   where
-  go :: Modes modes -> Terms terms -> Vars (ModedVars modes terms)
-  go SP.SNil                    SP.SNil                = SP.SNil
-  go (SMDontCare `SP.SCons` ms) (SVar{} `SP.SCons` ts) =              go ms ts
-  go (_          `SP.SCons` ms) (SSym{} `SP.SCons` ts) =              go ms ts
-  go (SMPlus     `SP.SCons` ms) (SVar v `SP.SCons` ts) = v `SP.SCons` go ms ts
+  go :: Terms terms -> Modes modes -> Vars (ModedVars terms modes)
+  go SP.SNil                SP.SNil                    = SP.SNil
+  go (SVar{} `SP.SCons` ts) (SMDontCare `SP.SCons` ms) =              go ts ms
+  go (SSym{} `SP.SCons` ts) (_          `SP.SCons` ms) =              go ts ms
+  go (SVar v `SP.SCons` ts) (SMPlus     `SP.SCons` ms) = v `SP.SCons` go ts ms
   go _ _ = error "Mode and term list size mismatch"
 
-keepVars :: Terms terms -> Vars (GetVars terms)
-keepVars SP.SNil                   = SP.SNil
-keepVars (SVar v `SP.SCons` terms) = v `SP.SCons` keepVars terms
-keepVars (SSym{} `SP.SCons` terms) =              keepVars terms
+type family AllVars (terms :: [ Term ]) :: Set Symbol where
+  AllVars '[]                 = '[]
+  AllVars ('Var var ': terms) = var ': (AllVars terms)
+  AllVars ('Sym sym ': terms) = AllVars terms
 
-type family GetVars (terms :: [ Term ]) :: Set Symbol where
-  GetVars '[]                 = Empty
-  GetVars ('Var var ': terms) = Add var (GetVars terms)
-  GetVars ('Sym sym ': terms) = GetVars terms
+allVars :: Atom terms modes -> Vars (AllVars terms)
+allVars (Atom _ terms _) = go terms
+  where
+  go :: Terms terms -> Vars (AllVars terms)
+  go SP.SNil                   = SP.SNil
+  go (SVar v `SP.SCons` ts) = v `SP.SCons` go ts
+  go (SSym{} `SP.SCons` ts) =              go ts
 
-type family ModedVars (modes :: [ Mode ]) (terms :: [ Term ]) :: Set Symbol where
-  ModedVars '[]                '[]              = Empty
-  ModedVars ('MDontCare ': ms) ('Var _   ': ts) =         ModedVars ms ts
-  ModedVars (_          ': ms) ('Sym _   ': ts) =         ModedVars ms ts
-  ModedVars ('MPlus     ': ms) ('Var var ': ts) = Add var (ModedVars ms ts)
-  ModedVars _ _ = TypeError ('Text "Modes and terms are not of equal length.")
+type PureVars (terms :: [ Term ]) (modes :: [ Mode ]) =
+  Difference (AllVars terms) (ModedVars terms modes)
+
+pureVars :: Atom terms modes -> Vars (PureVars terms modes)
+pureVars atom = allVars atom `sDifference` modedVars atom
+
+bodyVars :: Body bodyVars -> Vars bodyVars
+bodyVars EmptyBody                = L.SNil
+bodyVars (SnocBody _ _ _ allVars) = allVars
 
 --------------------------------------------------------------------------------
 -- Decision procedures
 --------------------------------------------------------------------------------
 
-decRangeRestriction :: Head headVars
+decRangeRestriction :: Head terms
                     -> Body bodyVars
-                    -> Maybe (Subseteq headVars bodyVars)
+                    -> Maybe (Subseteq (AllVars terms) bodyVars)
 decRangeRestriction atom = \case
   EmptyBody -> do
-    Refl <- decEmpty $ vars atom
-    pure Basic
-  SnocBody _ _ _ bodyVars -> decSubseteq (vars atom) bodyVars
+    Refl <- decEmpty $ allVars atom
+    pure L.Basic
+  SnocBody _ _ _ bodyVars -> decSubseteq (allVars atom) bodyVars
 
 decWellModedness :: Vars modedVars
                  -> Body bodyVars
@@ -197,115 +212,153 @@ decWellModedness modedAtomVars body =
   case body of
     EmptyBody | Refl <- lemSetRightId (vars body) -> do
       Refl <- decEmpty modedAtomVars
-      pure Basic
+      pure L.Basic
     SnocBody{} -> decSubseteq modedAtomVars (vars body)
 
 --------------------------------------------------------------------------------
 -- Datalog evaluator
 --------------------------------------------------------------------------------
+  {-
+data SomeSym = forall sym. KnownSymbol sym => SomeSym (SP.SSymbol sym)
 
-newtype Substitution  = Subst Symbol
-data SubstitutionTerm = SubstTerm T.Text T.Text deriving (Eq, Ord)
+type Unifier vars = (L.SList vars, [ SomeSym ])
 
-type Substs (vars :: Set Symbol) = Map 'Subst vars
+instance Eq SomeSym where
+  SomeSym s == SomeSym s' = SP.fromSing s == SP.fromSing s'
 
-type family UnSubsts (substs :: Set Substitution) :: Set Symbol where
-  UnSubsts Empty                  = Empty
-  UnSubsts ('Subst var ': substs) = Add var (UnSubsts substs)
+instance Ord SomeSym where
+  SomeSym s `compare` SomeSym s' = SP.fromSing s `compare` SP.fromSing s'
 
-unifierDom :: SSet substs -> SSet (UnSubsts substs)
-unifierDom SEmpty                         = SEmpty
-unifierDom (SSubst var _ `SP.SCons` rest) = var :> unifierDom rest
+instance {-# OVERLAPPING #-} Eq (Unifier (vars :: [ Symbol ])) where
+  (vs,ss) == (vs',ss') = SP.fromSing vs == SP.fromSing vs' && ss == ss'
 
-data instance SP.Sing :: Substitution -> Type where
-  SSubst :: SP.SSymbol var -> T.Text -> SP.Sing ('Subst var)
+instance {-# OVERLAPPING #-} Ord (Unifier (vars :: [ Symbol ])) where
+  (vs,ss) `compare` (vs',ss') = (SP.fromSing vs,ss) `compare` (SP.fromSing vs',ss')
 
-type SSubst (x :: Substitution) = SP.Sing x
-
-instance SP.SingKind Substitution where
-  type Demote Substitution = SubstitutionTerm
-  fromSing (SSubst var symbol) = SubstTerm (SP.fromSing var) symbol
-  toSing (SubstTerm var symbol) | SP.SomeSing var' <- SP.toSing var =
-     SP.SomeSing (SSubst var' symbol)
-
-type Unifier (substs :: Set Substitution) = SSet substs
-
-instance Eq (Unifier xs) where
-  u == v = SP.fromSing u == SP.fromSing v
-
-instance Ord (Unifier xs) where
-  u `compare` v = SP.fromSing u `compare` SP.fromSing v
-
-unify :: Atom modedVars pureVars -> Tuple n -> Maybe (Unifier (Substs pureVars))
-unify (Atom _ terms Refl) (T syms SP.SNat) = go terms syms
+unify :: Atom terms modes -> Tuple -> Maybe (Unifier (AllVars terms))
+unify atom@(Atom _ terms Refl) tuple = go terms tuple
   where
-  go :: forall (xs :: [ Term ]) (ys :: [ Symbol ])
-      . L.SList xs -> L.SList ys -> Maybe (L.SList (Substs (GetVars xs)))
-  go SP.SNil SP.SNil = Just SP.SNil
-  go (SSym s' `SP.SCons` ts) (s `SP.SCons` ss)
+  go :: forall (terms :: [ Term ])
+      . L.SList terms -> [ SomeSym ] -> Maybe (Unifier (AllVars terms))
+  go L.SNil [] = Just (L.SNil, [])
+  go (SSym s' `SP.SCons` ts) (SomeSym s : ss)
     | SP.Proved Refl <- s' SP.%~ s = go ts ss
     | otherwise                    = Nothing
-  go (SVar v `SP.SCons` ts) (s `SP.SCons` ss) = do
-    partialUnifier <- go ts ss
-    guard $ consistent v s partialUnifier
+  go (SVar v `SP.SCons` ts) (s : ss) = do
+    unifier@(vs', ss') <- go ts ss
+    guard $ consistent v s unifier
     -- The extension to the partial unifier might be redundant if $(v,s)$ is
     -- already in $partialUnifier$, but it simplifies the types.
-    pure $ SSubst SP.SSym (SP.fromSing s) `SP.SCons` partialUnifier
+    pure $ (SP.SSym `SP.SCons` vs', s : ss')
   go _ _ = error
     "Impossible. Trying to unify a tuple and terms that do not match in size."
 
-consistent :: SP.SSymbol var -> SP.SSymbol sym -> Unifier substs -> Bool
-consistent _ _ SP.SNil = True
-consistent svar ssym (SSubst svar' sym' `SP.SCons` substs) =
-  case (svar SP.%~ svar', SP.fromSing ssym == sym') of
-    (SP.Proved _, False) -> False
-    _                    -> consistent svar ssym substs
+consistent :: SP.SSymbol var -> SomeSym -> (Vars vars, [ SomeSym ]) -> Bool
+consistent _ _ (SP.SNil, []) = True
+consistent sv s'@(SomeSym s) (svar' `SP.SCons` svars, SomeSym ssym' : syms) =
+  case (sv SP.%~ svar', s SP.%~ ssym') of
+    (SP.Proved _, SP.Disproved _) -> False
+    _                             -> consistent sv s' (svars, syms)
+consistent _ _ _ = error "Unifier has uneven number of vars and symbols"
 
-findUnifiers :: Atom modedVars pureVars -> Solution -> S.Set (Unifier (Substs pureVars))
+findUnifiers :: Atom terms modes -> Solution -> S.Set (Unifier (AllVars terms))
 findUnifiers atom@(Atom predicate _ _) solution =
   case predicate `solLookup` solution of
     Just tuples -> S.map fromJust . S.filter isJust . S.map (unify atom) $ tuples
     Nothing     -> S.empty
 
-data Substituted terms modes substs = forall terms'. Substituted
-  (Terms terms')
-  (ModedVars modes terms' :~: ModedVars modes terms \\ UnSubsts substs)
-  (GetVars terms' :~: GetVars terms \\ UnSubsts substs)
-  (L.Length terms :~: L.Length terms')
+decElemUnifier :: SP.SSymbol var -> Unifier vars -> Maybe (ElemR vars var)
+decElemUnifier var unifier = var `decElem` fst unifier
 
-decElemUnifier :: SP.SSymbol var -> Unifier substs -> Maybe (ElemR (UnSubsts substs) var)
-decElemUnifier var unifier = var `decElem` unifierDom unifier
+lookupSym :: ElemR vars var -> Unifier vars -> SomeSym
+lookupSym _            (L.SNil,[])                     = error "Unreachable."
+lookupSym (L.There el) (_ `SP.SCons` vs, _      : ss ) = el `lookupSym` (vs, ss)
+lookupSym L.Here       (_              , symbol : _  ) = symbol
+lookupSym _ _ = error "Unifier has uneven number of vars and symbols"
 
-lookupSym :: ElemR (UnSubsts substs) var -> Unifier substs -> T.Text
-lookupSym _ SEmpty = error "Unreachable."
-lookupSym (L.There el) (SSubst{} `SP.SCons` unifier) = el `lookupSym` unifier
-lookupSym L.Here (SSubst _ symbol `SP.SCons` _) = symbol
+  -}
 
   {-
+data SubstitutedAtom terms modes vars = forall terms'.
+  SubstAtom (Atom terms' modes)
+            (AllVars terms' :~: Difference (AllVars terms) vars)
+            (Length terms' :~: Length terms)
 
-substitute :: forall modedVars vars substs
-            . Atom modedVars vars
-           -> Unifier substs
-           -> Atom (modedVars \\ UnSubsts substs) (vars \\ UnSubsts substs)
-substitute (Atom predicate@(Predicate _ modes _) terms Refl) unifier
-  | Substituted terms' Refl Refl Refl <- go modes terms = Atom predicate terms' Refl
+data SubstitutedTerms terms vars n = forall terms'.
+  SubstTerms (Terms terms')
+             (AllVars terms' :~: Difference (AllVars terms) vars)
+             (Length terms' :~: n)
+
+substituteVar :: forall n terms vars var
+               . SubstitutedTerms terms vars n
+              -> (SP.SSymbol var, SomeSym)
+              -> SubstitutedTerms terms (var ': vars) n
+substituteVar (SubstTerms L.SNil Refl prf') _ = (SubstTerms L.SNil Refl prf')
+  {-
+substituteVar (SubstTerms (t@(SSym s) `L.SCons` ts) prf Refl) subst =
+  case substituteVar (SubstTerms @terms @vars @(n - 1) ts prf Refl) subst of
+    SubstTerms ts' prf' Refl -> SubstTerms (t `L.SCons` ts') prf' Refl
+  -}
+substituteVar (SubstTerms (t `L.SCons` ts) prf Refl :: SubstitutedTerms (t ': ts) vars n) subst@(svar', SomeSym sym') =
+  _
+  {-
+  case t of
+    SSym s ->
+      case substituteVar (SubstTerms @terms @vars @(n - 1) ts prf Refl) subst of
+        SubstTerms ts' prf' Refl -> SubstTerms (t `L.SCons` ts') prf' Refl
+    SVar svar ->
+      case svar %== svar' of
+        STrue ->
+          case substituteVar (SubstTerms @terms @vars @(n - 1) ts _ Refl) subst of
+            SubstTerms ts' prf' Refl -> SubstTerms (SSym sym' `L.SCons` ts') _ Refl
+        SFalse ->
+          case substituteVar (SubstTerms @terms @vars @(n - 1) ts _ Refl) subst of
+            SubstTerms ts' prf' Refl -> SubstTerms (t `L.SCons` ts') _ Refl
+  -}
+
+  {-
+data SubstitutedTerms' terms vars = forall terms'.
+  SubstTerms' (Terms terms')
+              (AllVars terms' :~: Difference (AllVars terms) vars)
+              (Length terms' :~: Length terms)
+
+substituteVar' :: forall terms vars var
+                . Terms terms
+               -> SubstitutedTerms' terms vars
+               -> (SP.SSymbol var, SomeSym)
+               -> SubstitutedTerms' terms (var ': vars)
+substituteVar' L.SNil (SubstTerms' L.SNil Refl Refl) _ = (SubstTerms' L.SNil Refl Refl)
+substituteVar' (t `L.SCons` ts) (SubstTerms' (t' `L.SCons` ts') prf Refl) subst@(svar, SomeSym s) =
+  _
+  case t' of
+    SSym _ ->
+      case substituteVar' ts (SubstTerms' @_ @vars ts' _ Refl) subst of
+        SubstTerms' ts'' prf' Refl -> SubstTerms' (t `L.SCons` ts'') _ Refl
+    SVar svar' ->
+      case svar %== svar' of
+        STrue ->
+          case substituteVar' ts (SubstTerms' @_ @vars ts' _ Refl) subst of
+            SubstTerms' ts' prf' Refl -> SubstTerms' (SSym s `L.SCons` ts') _ Refl
+        SFalse ->
+          case substituteVar' ts (SubstTerms' @_ @vars ts' _ Refl) subst of
+            SubstTerms' ts' prf' Refl -> SubstTerms' (t `L.SCons` ts') prf' Refl
+  -}
+
+substitute :: forall terms terms' modes vars
+            . Atom terms modes
+           -> Unifier vars
+           -> SubstitutedAtom terms modes vars
+substitute (Atom predicate terms Refl) unifier =
+  case go terms unifier of
+    SubstTerms terms' prf Refl -> SubstAtom (Atom predicate terms' Refl) prf Refl
   where
-  go :: forall modes terms terms'
-      . Modes modes
-     -> Terms terms
-     -> Substituted terms modes substs
-  go SP.SNil SP.SNil = Substituted SP.SNil Refl Refl Refl
-  go (SMDontCare `SP.SCons` ms) (t@(SVar var) `SP.SCons` ts)
-    | Substituted rest prf1 prf2 Refl <- go ms ts =
-      case decElemUnifier var unifier of
-        Just elem | SP.SomeSing ssym <- SP.toSing (elem `lookupSym` unifier) ->
-          Substituted (SSym ssym `SP.SCons` rest) prf1 prf2 Refl
-        Nothing ->
-          Substituted (t `SP.SCons` rest) prf1 prf2 Refl
-  go (_ `SP.SCons` ms) (t@SSym{} `SP.SCons` ts)
-    | Substituted rest prf1 prf2 Refl <- go ms ts = Substituted (t `SP.SCons` rest) prf1 prf2 Refl
-  go (SMPlus `SP.SCons` ms) (t@(SVar var) `SP.SCons` ts)
-    | Substituted rest prf1 prf2 Refl <- go ms ts = Substituted (t `SP.SCons` rest) prf1 prf2 Refl
+  go :: forall terms vars. Terms terms -> Unifier vars -> SubstitutedTerms terms vars (L.Length terms)
+  go ts (L.SNil,[]) = SubstTerms ts Refl Refl
+  go ts (svar `L.SCons` svars, s : ss) = substituteVar (go ts (svars, ss)) (svar, s)
+
+extend :: Unifier vars -> Unifier vars' -> Unifier (vars' L.++ vars)
+extend (baseVars, baseSyms) (extensionVars, extensionSyms) =
+  (extensionVars L.%++ baseVars, extensionSyms ++ baseSyms)
 
   -}
 
@@ -313,42 +366,73 @@ substitute (Atom predicate@(Predicate _ modes _) terms Refl) unifier
 -- Datalog evaluator
 --------------------------------------------------------------------------------
 
-data Tuple n = forall (xs :: [ Symbol ]). T (L.SList xs) (SP.SNat (L.Length xs))
+  {-
 
-data Relation = forall n. KnownNat n => Relation (SomePredicate n) (S.Set (Tuple n))
+type Tuple = [ SomeSym ]
+
+data Relation = forall n. KnownNat n => Relation (SomePredicate n) (S.Set Tuple)
 
 newtype Solution = Solution [ Relation ] deriving (Eq)
 
 solLookup :: forall n modes
            . KnownNat n
-          => Predicate n modes -> Solution -> Maybe (S.Set (Tuple n))
+          => Predicate n modes -> Solution -> Maybe (S.Set Tuple)
 solLookup pred (Solution rels) = go rels
   where
   sPred :: SomePredicate n
   sPred = SP pred
 
-  go :: [ Relation ] -> Maybe (S.Set (Tuple n))
+  go :: [ Relation ] -> Maybe (S.Set Tuple)
   go [] = Nothing
   go (Relation pred' tuples : rs)
     | Just Refl <- sPred `testEquality` pred' = Just tuples
     | otherwise = go rs
 
-{-
+data SubstitutedHead = forall terms. SubstHead (Head terms) (AllVars terms :~: '[])
+
 step :: Solution -> Clause -> Relation
-step solution (Clause head body rangeRestriction) = S.map (walkBody body) $ \unifier ->
-  case deriveHead head unifier of
-    Atom predicate terms sizePrf -> Relation predicate (fromHead terms sizePrf)
+step solution (Clause head@(Atom predicate _ _) body rangeRestriction) =
+  Relation (SP predicate) $ (`S.map` walkBody body) $ \unifier ->
+    fromHead (deriveHead head unifier rangeRestriction)
   where
-  walkBody :: forall pureVars. Body pureVars -> S.Set (Unifier pureVars)
-  walkBody EmptyBody = S.singleton L.SNil
-  walkBody (SnocBody body atom _ _) = S.unions $ (`S.map` go body) $ \unifier ->
-    findUnifiers (substitute atom unifier) solution
+  walkBody :: Body vars -> S.Set (Unifier vars)
+  walkBody EmptyBody = S.singleton (L.SNil, [])
+  walkBody (SnocBody body atom _ _) = S.unions $ (`S.map` walkBody body) $ \unifier ->
+    case substitute atom unifier of
+      SubstAtom atom' Refl Refl ->
+        (`S.map` findUnifiers atom' solution) $ \unifierExtension ->
+          extend unifier unifierExtension
 
-  deriveHead :: Head vars -> Unifier vars' -> SubsetEq vars vars' -> Head '[]
-  deriveHead head unifier subseteq = substitute head unifier
+  deriveHead :: forall terms terms' vars
+              . Head terms -> Unifier vars -> Subseteq (AllVars terms) vars
+             -> SubstitutedHead
+  deriveHead head unifier subseteq =
+    case substitute head unifier of
+      SubstAtom head' Refl Refl
+        | Refl <- lemEmptyDiff (allVars head) (fst unifier) subseteq ->
+          SubstHead head' Refl
 
-  fromHead :: Terms terms -> n :~: L.Length terms -> Tuples n
-  fromHead = _
+  lemEmptyDiff :: L.SList xs -> L.SList ys -> Subseteq xs ys -> Difference xs ys :~: '[]
+  lemEmptyDiff _ ys L.Basic | Refl <- lemDiffFromNada ys = Refl
+  lemEmptyDiff xs ys (prf `L.Next` prfs) | Refl <- lemDiffStep xs prf = _
+
+  lemDiffStep :: forall x xs ys. L.SList xs -> ElemR ys x -> Difference (x ': xs) ys :~: Difference xs ys
+  lemDiffStep = _
+
+  fromHead :: SubstitutedHead -> Tuple
+  fromHead (SubstHead (Atom _ terms _) prf) = go terms prf
+    where
+    go :: Terms terms -> AllVars terms :~: '[] -> Tuple
+    go L.SNil _ = []
+    go (SSym s `L.SCons` ss) Refl | tuple <- go ss Refl = SomeSym s : tuple
+    go (SVar _ `L.SCons` _) prf = absurd (absurdList prf)
+
+  absurdList :: (x ': xs) :~: '[] -> Void
+  absurdList Refl = error "From nothing comes nothing"
+
+lemDiffFromNada :: L.SList xs -> Difference '[] xs :~: '[]
+lemDiffFromNada L.SNil = Refl
+lemDiffFromNada (_ `L.SCons` xs) | Refl <- lemDiffFromNada xs = Refl
 
 round :: Program -> Solution -> Solution
 round program solution = mconcat (map (singleton . step solution) program)
@@ -361,7 +445,7 @@ evaluator program solution =
     else evaluator program newSolution
   where
   newSolution = round program solution
--}
+
 
 --------------------------------------------------------------------------------
 -- Combination
@@ -404,12 +488,6 @@ instance Eq Relation where
       all (`elem` tuples2) tuples1
     | otherwise = False
 
-instance Ord (Tuple n) where
-  T xs _ `compare` T ys _ = SP.fromSing xs `compare` SP.fromSing ys
-
-instance Eq (Tuple n) where
-  T xs _ == T ys _ = SP.fromSing xs == SP.fromSing ys
-
 instance TestEquality SomePredicate where
   testEquality (SP (Predicate name1 _ arity1))
                (SP (Predicate name2 _ arity2)) = do
@@ -418,11 +496,15 @@ instance TestEquality SomePredicate where
       SP.Proved prf -> Just prf
       _ -> Nothing
 
+  -}
+
 --------------------------------------------------------------------------------
 -- Tests
 --------------------------------------------------------------------------------
 
-p :: Predicate 2 '[ 'MPlus, 'MDontCare ]
+type PMode = '[ 'MPlus, 'MDontCare ]
+
+p :: Predicate 2 PMode
 p = Predicate "p" (SMPlus `SP.SCons` SMDontCare `SP.SCons` SP.SNil) SP.SNat
 
 easy :: Predicate 1 '[ 'MDontCare ]
@@ -431,13 +513,13 @@ easy = Predicate "easy" (SMDontCare `SP.SCons` SP.SNil)  SP.SNat
 someEasy :: SomeAtom
 someEasy = SA $ Atom easy (SVar (SP.sing @"X") `SP.SCons` SP.SNil) Refl
 
-groundP :: Atom '[] '[ "X" ]
+groundP :: Atom '[ 'Sym "42", 'Var "X" ] PMode
 groundP = Atom p (SSym (SP.sing @"42") `SP.SCons` SVar (SP.sing @"X") `SP.SCons` SP.SNil) Refl
 
 someGroundP :: SomeAtom
 someGroundP = SA groundP
 
-modedP :: Atom '[ "X" ] '[ "X", "Y" ]
+modedP :: Atom '[ 'Var "X", 'Var "Y" ] PMode
 modedP = Atom p (SVar (SP.sing @"X") `SP.SCons` SVar (SP.sing @"Y") `SP.SCons` SP.SNil) Refl
 
 someModedP :: SomeAtom

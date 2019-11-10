@@ -4,7 +4,7 @@ cabal-version: 2.2
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 93f24830dc6fe28157d3d6e53cfb4956c960c40425ddb1a08be68b044012a9ec
+-- hash: 67a8ae2fd06734cade9cf841d22df9fd74cd9ee5e1b71b1ccba6aa83457ff8c5
 
 name:           dataflow-safe-by-construction
 version:        0.1.0
@@ -27,6 +27,10 @@ library
       Data.Type.List
       Data.Type.Set
       DataflowSafety
+      Evaluator
+      Set
+      Types
+      Unification
   other-modules:
       Paths_dataflow_safe_by_construction
   hs-source-dirs:

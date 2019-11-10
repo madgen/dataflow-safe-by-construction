@@ -11,7 +11,6 @@ module Data.Singletons.Prelude.List.Extras
   , ElemR(..)
   , AllR(..)
   , Subseteq
-  , Map'
     -- * Properties
   , lemListRightId
     -- * Decision procedures
@@ -43,10 +42,6 @@ data AllR :: (k -> Type) -> [ k ] -> Type where
   Next  :: p k -> AllR p ks -> AllR p (k ': ks)
 
 type Subseteq (xs :: [ k ]) (ys :: [ k ]) = AllR (ElemR ys) xs
-
-type family Map' (f :: k -> l) (xs :: [ k ]) :: [ l ] where
-  Map' _ '[]       = '[]
-  Map' f (x ': xs) = f x ': Map' f xs
 
 --------------------------------------------------------------------------------
 -- Properties

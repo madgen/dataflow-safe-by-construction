@@ -12,6 +12,7 @@
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 {- | Sets emulated by lists in a singleton-like interface
   -}
@@ -28,13 +29,12 @@ module Data.Singletons.Set
   , type Add
   , type Union
   , type Delete
-  , type (\\)
+  , sDelete
+  , type Difference
+  , sDifference
   , type AllR
-  , pattern Basic
-  , pattern Next
   , type ElemR
   , type Subseteq
-  , type Map
     -- * Properties
   , lemSetRightId
     -- * Decision procedures
@@ -48,6 +48,7 @@ import Data.Kind (Type)
 import           Data.Singletons.Decide
 import qualified Data.Singletons.Prelude.List as L
 import qualified Data.Singletons.Prelude.List.Extras as L
+import           Data.Singletons.TH
 
 --------------------------------------------------------------------------------
 -- Type-level
@@ -74,26 +75,18 @@ type family Add (el :: k) (set :: Set k) = (res :: Set k) | res -> el set where
 type family Union (set1 :: Set k) (set2 :: Set k) :: Set k where
   Union set1 set2 = set1 L.++ set2
 
-type family Delete (el :: k) (set :: Set k) :: Set k where
-  Delete el set = L.DeleteAll el set
+-- type family Delete (el :: k) (set :: Set k) :: Set k where
+--   Delete el set = L.DeleteAll el set
 
-type family (set1 :: Set k) \\ (set2 :: Set k) :: Set k where
-  set1 \\ '[]         = set1
-  set1 \\ (el ': els) = Delete el (set1 \\ els)
+-- type family Difference (set1 :: Set k) (set2 :: Set k) :: Set k where
+--   Difference set1 '[]         = set1
+--   Difference set1 (el ': els) = Difference (Delete el set1) els
 
 type AllR (p :: k -> Type) (xs :: [ k ]) = L.AllR p xs
-
-pattern Basic :: AllR p Empty
-pattern Basic = L.Basic
-
-pattern Next  :: p el -> AllR p set -> AllR p (Add el set)
-pattern Next el prf = L.Next el prf
 
 type ElemR (xs :: [ k ]) (x :: k) = L.ElemR xs x
 
 type Subseteq xs ys = L.Subseteq xs ys
-
-type Map (f :: k -> l) (xs :: Set k) = L.Map' f xs
 
 --------------------------------------------------------------------------------
 -- Singletons
@@ -133,3 +126,13 @@ decSubseteq :: forall (set1 :: Set k) (set2 :: Set k)
             . SDecide k
            => SSet set1 -> SSet set2 -> Maybe (Subseteq set1 set2)
 decSubseteq = L.decSubseteq
+
+$(singletons [d|
+  delete :: Eq a => a -> [ a ] -> [ a ]
+  delete _ [] = []
+  delete el (el' : els) = if el' == el then delete el els else el' : delete el els
+
+  difference :: Eq a => [ a ] -> [ a ] -> [ a ]
+  difference xs [] = xs
+  difference xs (y : ys) = delete y (difference xs ys)
+  |])
