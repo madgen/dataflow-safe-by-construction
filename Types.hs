@@ -146,17 +146,24 @@ $(singletons [d|
   keepVars (TLit{} : terms) = keepVars terms
   |])
 
+-- Polarity
+
+$(singletons [d|
+  data Polarity = Positive | Negative deriving (Eq, Ord)
+  |])
+
 -- Modes
 
 $(singletons [d|
   data Mode = Plus | DontCare deriving (Eq)
 
-  modedVars :: [ Term ] -> [ Mode ] -> [ Variable ]
-  modedVars [] [] = []
-  modedVars (TVar{}   : ts) (DontCare : ms) =       modedVars ts ms
-  modedVars (TVar var : ts) (Plus     : ms) = var : modedVars ts ms
-  modedVars (TLit{}   : ts) (_        : ms) =       modedVars ts ms
-  modedVars _ _ = error "Uneven number of terms and modes"
+  modedVars :: Polarity -> [ Term ] -> [ Mode ] -> [ Variable ]
+  modedVars _ [] [] = []
+  modedVars Positive (TVar var : ts) (Plus     : ms) = var : modedVars Positive ts ms
+  modedVars Positive (TVar{}   : ts) (DontCare : ms) =       modedVars Positive ts ms
+  modedVars Negative (TVar var : ts) (_        : ms) = var : modedVars Positive ts ms
+  modedVars _        (TLit{}   : ts) (_        : ms) =       modedVars Positive ts ms
+  modedVars _ _ _ = error "Uneven number of terms and modes"
   |])
 
 type SModes (modes :: [ Mode ]) = SList modes
@@ -174,12 +181,6 @@ instance TestEquality Predicate where
 
 instance Show (Predicate modes) where
   show (Predicate name _) = name
-
--- Polarity
-
-$(singletons [d|
-  data Polarity = Positive | Negative deriving (Eq, Ord)
-  |])
 
 -- Atom
 
@@ -231,7 +232,7 @@ data Body :: [ Variable ] -> Type where
   BSnoc  :: Body bodyVars
          -> Atom modes polarity terms
          -- | Well-modedness
-         -> Subseteq (ModedVars terms modes) bodyVars :~: 'True
+         -> Subseteq (ModedVars polarity terms modes) bodyVars :~: 'True
          -- | All body variables
          -> SVars (Exclude (KeepVars terms) bodyVars ++ bodyVars)
          -> Body  (Exclude (KeepVars terms) bodyVars ++ bodyVars)
@@ -263,9 +264,9 @@ decRangeRestriction (Head (Atom _ _ sTerms) Refl) body =
     SFalse -> Nothing
 
 decWellModedness :: Atom modes polarity terms -> Body bodyVars
-                 -> Maybe (Subseteq (ModedVars terms modes) bodyVars :~: 'True)
-decWellModedness (Atom (Predicate _ sModes) _ sTerms) body =
-  case sSubseteq (sModedVars sTerms sModes) (sBodyVars body) of
+                 -> Maybe (Subseteq (ModedVars polarity terms modes) bodyVars :~: 'True)
+decWellModedness (Atom (Predicate _ sModes) sPolarity sTerms) body =
+  case sSubseteq (sModedVars sPolarity sTerms sModes) (sBodyVars body) of
     STrue  -> Just Refl
     SFalse -> Nothing
 
