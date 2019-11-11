@@ -96,47 +96,30 @@ type family MakeSubsts (ts :: [ Term ]) (ls :: [ Literal ]) :: [ Substitution ] 
   MakeSubsts ('TLit _   ': ts)  (_   ': ls) = MakeSubsts ts ls
   MakeSubsts ('TVar var ': ts)  (lit ': ls) = 'Subst var lit ': MakeSubsts ts ls
 
-sUnifyTerms :: STerms terms -> SList lits -> Maybe (Unifier (MakeSubsts terms lits))
-sUnifyTerms SNil SNil = Just SNil
-sUnifyTerms (STLit l `SCons` ts) (l' `SCons` ls) =
-  case l %== l' of
-    STrue  -> sUnifyTerms ts ls
-    SFalse -> Nothing
-sUnifyTerms (STVar v `SCons` ts) (l  `SCons` ls) = do
-  unifier <- sUnifyTerms ts ls
-  let subst = SSubst v l
-  case subst `sConsistent` unifier of
-    STrue -> pure $ subst `SCons` unifier
-    SFalse -> Nothing
-sUnifyTerms _ _ = Nothing
-
-sUnifyTerms' :: STerms terms -> STerms terms'
+sUnifyTerms :: STerms terms -> STerms terms'
              -> KeepVars terms' :~: '[]
              -> Maybe (SomeUnifier (KeepVars terms))
-sUnifyTerms' SNil SNil _ = Just (SU SNil Refl)
-sUnifyTerms' (STLit l `SCons` ts) (STLit l' `SCons` ls) prf =
+sUnifyTerms SNil SNil _ = Just (SU SNil Refl)
+sUnifyTerms (STLit l `SCons` ts) (STLit l' `SCons` ls) prf =
   case l %== l' of
-    STrue  -> sUnifyTerms' ts ls prf
+    STrue  -> sUnifyTerms ts ls prf
     SFalse -> Nothing
-sUnifyTerms' (STVar v `SCons` ts) (STLit l  `SCons` ls) noVarsPrf = do
-  SU unifier Refl <- sUnifyTerms' ts ls noVarsPrf
+sUnifyTerms (STVar v `SCons` ts) (STLit l  `SCons` ls) noVarsPrf = do
+  SU unifier Refl <- sUnifyTerms ts ls noVarsPrf
   let subst = SSubst v l
   case subst `sConsistent` unifier of
     STrue -> pure $ SU (subst `SCons` unifier) Refl
     SFalse -> Nothing
-sUnifyTerms' _ (STVar _ `SCons` _) prf = absurd (absurdList prf)
-sUnifyTerms' _ _ _ = Nothing
+sUnifyTerms _ (STVar _ `SCons` _) prf = absurd (absurdList prf)
+sUnifyTerms _ _ _ = Nothing
 
 absurdList :: (x ': xs) :~: '[] -> Void
 absurdList _ = error "Inaccessible"
 
-unify :: Atom modes terms -> SList lits -> Maybe (Unifier (MakeSubsts terms lits))
-unify (Atom _ sTerms) = sUnifyTerms sTerms
-
-unify' :: Atom modes terms -> Tuple -> Maybe (SomeUnifier (KeepVars terms))
-unify' (Atom pred sTerms) (Tuple (Atom pred' sTerms') prf) = do
+unify :: Atom modes terms -> Tuple -> Maybe (SomeUnifier (KeepVars terms))
+unify (Atom pred sTerms) (Tuple (Atom pred' sTerms') prf) = do
  Refl <- pred `testEquality` pred'
- sUnifyTerms' sTerms sTerms' prf
+ sUnifyTerms sTerms sTerms' prf
 
 -- Properties of substitution
 

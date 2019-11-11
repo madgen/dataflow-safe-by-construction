@@ -21,7 +21,7 @@ import Unification
 type Solution = S.Set Tuple
 
 findUnifiers :: Atom modes terms -> Solution -> S.Set (SomeUnifier (KeepVars terms))
-findUnifiers atom solution = catMaybes $ S.map (unify' atom) solution
+findUnifiers atom solution = catMaybes $ S.map (unify atom) solution
   where
   catMaybes :: S.Set (Maybe (SomeUnifier vars)) -> S.Set (SomeUnifier vars)
   catMaybes f = foldr `flip` mempty `flip` f
