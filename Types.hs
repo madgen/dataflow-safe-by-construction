@@ -21,6 +21,7 @@ import Prelude hiding (head, pred)
 import Control.Monad (guard, forM_)
 
 import           Data.Kind (Type)
+import           Data.List (intercalate)
 import           Data.Singletons
 import           Data.Singletons.Decide
 import           Data.Singletons.Prelude hiding (Head)
@@ -57,6 +58,9 @@ $(singletonsOnly [d|
     Var sym `compare` Var sym' = sym `compare` sym'
   |])
 
+instance Show (SVariable term) where
+  show (SVar var) = show var
+
 -- Literal singletons
 
 newtype LiteralT = LitT T.Text deriving (Eq, Ord)
@@ -86,6 +90,9 @@ $(singletonsOnly [d|
   instance Ord Literal where
     Lit sym `compare` Lit sym' = sym `compare` sym'
   |])
+
+instance Show (SLiteral term) where
+  show (SLit lit) = show lit
 
 -- Term singletons
 
@@ -123,6 +130,10 @@ $(singletonsOnly [d|
     TLit{} `compare` TVar{} = LT
   |])
 
+instance Show (STerm term) where
+  show (STVar var) = show var
+  show (STLit lit) = show lit
+
 -- Collections for vars and terms
 
 type STerms (terms :: [ Term ]) = SList terms
@@ -152,7 +163,7 @@ type SModes (modes :: [ Mode ]) = SList modes
 
 -- Predicate
 
-data Predicate (modes :: [ Mode ]) = Predicate T.Text (SModes modes)
+data Predicate (modes :: [ Mode ]) = Predicate String (SModes modes)
 
 instance TestEquality Predicate where
   testEquality (Predicate name sModes) (Predicate name' sModes') = do
@@ -161,12 +172,24 @@ instance TestEquality Predicate where
       Proved a     -> Just a
       Disproved _ -> Nothing
 
+instance Show (Predicate modes) where
+  show (Predicate name _) = name
+
 -- Atom
 
 data Atom (modes :: [ Mode ]) (terms :: [ Term ]) =
   Atom (Predicate modes) (STerms terms)
 
 data SomeAtom = forall modes terms. SA (Atom modes terms)
+
+instance Show (Atom modes terms) where
+  show (Atom predicate terms) =
+    show predicate <> "(" <> intercalate "," (showTerms terms) <> ")"
+    where
+    showTerms :: forall (terms' :: [ Term ]). SList terms' -> [ String ]
+    showTerms SNil = []
+    showTerms (t `SCons` ts) = show t : showTerms ts
+
 
 data Tuple = forall modes terms. Tuple (Atom modes terms) (KeepVars terms :~: '[])
 
@@ -179,6 +202,9 @@ instance Ord Tuple where
   Tuple (Atom (Predicate name _) terms) _ `compare`
     Tuple (Atom (Predicate name' _) terms') _ =
       (name, fromSing terms) `compare` (name', fromSing terms')
+
+instance Show Tuple where
+  show (Tuple atom _) = show atom
 
 -- Clause
 

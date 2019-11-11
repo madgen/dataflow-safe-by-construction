@@ -3,14 +3,16 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ExistentialQuantification #-}
 
 module Evaluator where
 
-import Prelude hiding (round, head)
+import Prelude hiding (round, head, pred)
 
 import qualified Data.Set as S
 import           Data.Singletons
+import           Data.Singletons.TypeLits
 import           Data.Singletons.Prelude hiding (Head)
 import           Data.Type.Equality hiding (type (==))
 
@@ -66,3 +68,72 @@ evaluator program solution =
     else evaluator program newSolution
   where
   newSolution = round program solution
+
+-- Tests
+
+type Pure2 = '[ 'DontCare, 'DontCare ]
+
+ancestorP, parentP :: Predicate Pure2
+ancestorP = Predicate "ancestor" sing
+parentP   = Predicate "parent" sing
+
+atom2Gen :: Predicate Pure2 -> STerm term -> STerm term' -> Atom Pure2 '[term, term']
+atom2Gen pred t1 t2 = Atom pred (t1 `SCons` t2 `SCons` SNil)
+
+ancestorA, parentA :: STerm term -> STerm term' -> Atom Pure2 '[term, term']
+ancestorA = atom2Gen ancestorP
+parentA   = atom2Gen parentP
+
+tuple2Gen :: Predicate Pure2 -> SSymbol sym1 -> SSymbol sym2 -> Tuple
+tuple2Gen pred s1 s2 = Tuple (Atom pred (STLit (SLit s1) `SCons` STLit (SLit s2) `SCons` SNil)) Refl
+
+ancestorT, parentT :: SSymbol sym1 -> SSymbol sym2 -> Tuple
+ancestorT = tuple2Gen ancestorP
+parentT   = tuple2Gen parentP
+
+ancestorProgram :: Program
+ancestorProgram =
+  case traverse (uncurry mkClause) clauseCandidates of
+    Right clauses -> clauses
+    Left err -> error err
+  where
+  clauseCandidates =
+    [ ( SA $ ancestorA (STVar (SVar $ sing @"X")) (STVar (SVar $ sing @"Y"))
+      , [ SA $ parentA (STVar (SVar $ sing @"X")) (STVar (SVar $ sing @"Y")) ])
+    , ( SA $ ancestorA (STVar (SVar $ sing @"X")) (STVar (SVar $ sing @"Y"))
+      , [ SA $ ancestorA (STVar (SVar $ sing @"X")) (STVar (SVar $ sing @"T"))
+        , SA $ ancestorA (STVar (SVar $ sing @"T")) (STVar (SVar $ sing @"Y"))
+        ])
+    ]
+
+input :: Solution
+input = S.fromList
+  [ parentT (sing @"Nilufer") (sing @"Mistral")
+  , parentT (sing @"Laurent") (sing @"Mistral")
+  , parentT (sing @"Hulusi") (sing @"Emir")
+  , parentT (sing @"Nazli") (sing @"Emir")
+  , parentT (sing @"Orhan") (sing @"Hulusi")
+  , parentT (sing @"Orhan") (sing @"Nilufer")
+  ]
+
+expected :: Solution
+expected = input <> S.fromList
+  [ ancestorT (sing @"Nilufer") (sing @"Mistral")
+  , ancestorT (sing @"Laurent") (sing @"Mistral")
+  , ancestorT (sing @"Hulusi") (sing @"Emir")
+  , ancestorT (sing @"Nazli") (sing @"Emir")
+  , ancestorT (sing @"Orhan") (sing @"Hulusi")
+  , ancestorT (sing @"Orhan") (sing @"Nilufer")
+  , ancestorT (sing @"Orhan") (sing @"Emir")
+  , ancestorT (sing @"Orhan") (sing @"Mistral")
+  ]
+
+ancestorTest :: IO ()
+ancestorTest =
+  if output == expected
+    then putStrLn "Ancestor runs successfully"
+    else do
+      putStrLn "Ancestor program failed. Here's the output: "
+      print output
+  where
+  output = evaluator ancestorProgram input
