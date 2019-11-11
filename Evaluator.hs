@@ -50,13 +50,6 @@ deriveHead (Head atom@(Atom _ terms) _) unifier subseteq =
   case substAtom atom unifier of
     head' -> Tuple head' (lemCompleteSubst terms unifier subseteq)
 
-lemCompleteSubst :: STerms terms -> Unifier substs
-                 -> Subseteq (KeepVars terms) (Map SubstVarSym0 substs) :~: 'True
-                 -> KeepVars (SubstTerms terms substs) :~: '[]
-lemCompleteSubst terms substs subseteq
-  | Refl <- lemSubstOnVars terms substs
-  , Refl <- lemExhaust (sKeepVars terms) (sMap (sing @SubstVarSym0) substs) subseteq = Refl
-
 round :: Program -> Solution -> Solution
 round program solution = mconcat (map (step solution) program)
                       <> solution

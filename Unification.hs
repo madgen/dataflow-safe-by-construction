@@ -152,6 +152,13 @@ lemSubstOnVars sTerms (sSubst `SCons` sSubsts)
   | Refl <- sym $ lemSingleSubstOnVars sTerms sSubst
   , Refl <- lemSubstOnVars (sSingleSubstTerms sSubst sTerms) sSubsts = Refl
 
+lemCompleteSubst :: STerms terms -> Unifier substs
+                 -> Subseteq (KeepVars terms) (Map SubstVarSym0 substs) :~: 'True
+                 -> KeepVars (SubstTerms terms substs) :~: '[]
+lemCompleteSubst terms substs subseteq
+  | Refl <- lemSubstOnVars terms substs
+  , Refl <- lemExhaust (sKeepVars terms) (sMap (sing @SubstVarSym0) substs) subseteq = Refl
+
 -- Useful instances
 
 $(singletonsOnly [d|
