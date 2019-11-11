@@ -175,15 +175,22 @@ instance TestEquality Predicate where
 instance Show (Predicate modes) where
   show (Predicate name _) = name
 
+-- Polarity
+
+$(singletons [d|
+  data Polarity = Positive | Negative deriving (Eq, Ord)
+  |])
+
 -- Atom
 
-data Atom (modes :: [ Mode ]) (terms :: [ Term ]) =
-  Atom (Predicate modes) (STerms terms)
+data Atom (modes :: [ Mode ]) (polarity :: Polarity) (terms :: [ Term ]) =
+  Atom (Predicate modes) (SPolarity polarity) (STerms terms)
 
-data SomeAtom = forall modes terms. SA (Atom modes terms)
+data SomeAtom = forall modes polarity terms. SA (Atom modes polarity terms)
 
-instance Show (Atom modes terms) where
-  show (Atom predicate terms) =
+instance Show (Atom modes polarity terms) where
+  show (Atom predicate sPolarity terms) =
+    case sPolarity of {SPositive -> ""; SNegative -> "!"} <>
     show predicate <> "(" <> intercalate "," (showTerms terms) <> ")"
     where
     showTerms :: forall (terms' :: [ Term ]). SList terms' -> [ String ]
@@ -191,16 +198,17 @@ instance Show (Atom modes terms) where
     showTerms (t `SCons` ts) = show t : showTerms ts
 
 
-data Tuple = forall modes terms. Tuple (Atom modes terms) (KeepVars terms :~: '[])
+data Tuple = forall modes terms.
+  Tuple (Atom modes 'Positive terms) (KeepVars terms :~: '[])
 
 instance Eq Tuple where
-  Tuple (Atom (Predicate name _) sTerms) _ ==
-    Tuple (Atom (Predicate name' _) sTerms') _ =
+  Tuple (Atom (Predicate name _) _ sTerms) _ ==
+    Tuple (Atom (Predicate name' _) _ sTerms') _ =
     name == name' && fromSing sTerms == fromSing sTerms'
 
 instance Ord Tuple where
-  Tuple (Atom (Predicate name _) terms) _ `compare`
-    Tuple (Atom (Predicate name' _) terms') _ =
+  Tuple (Atom (Predicate name _) _ terms) _ `compare`
+    Tuple (Atom (Predicate name' _) _ terms') _ =
       (name, fromSing terms) `compare` (name', fromSing terms')
 
 instance Show Tuple where
@@ -213,14 +221,15 @@ $(singletonsOnly [d|
   isPure = all (DontCare ==)
   |])
 
-data Head terms = forall modes. Head (Atom modes terms) (IsPure modes :~: 'True)
+data Head terms = forall modes.
+  Head (Atom modes 'Positive terms) (IsPure modes :~: 'True)
 
 data SomeHead = forall terms. SH (Head terms)
 
 data Body :: [ Variable ] -> Type where
   BEmpty :: Body '[]
   BSnoc  :: Body bodyVars
-         -> Atom modes terms
+         -> Atom modes polarity terms
          -- | Well-modedness
          -> Subseteq (ModedVars terms modes) bodyVars :~: 'True
          -- | All body variables
@@ -248,20 +257,20 @@ type Program = [ Clause ]
 
 decRangeRestriction :: Head terms -> Body bodyVars
                     -> Maybe (Subseteq (KeepVars terms) bodyVars :~: 'True)
-decRangeRestriction (Head (Atom _ sTerms) Refl) body =
+decRangeRestriction (Head (Atom _ _ sTerms) Refl) body =
   case sSubseteq (sKeepVars sTerms) (sBodyVars body) of
     STrue  -> Just Refl
     SFalse -> Nothing
 
-decWellModedness :: Atom modes terms -> Body bodyVars
+decWellModedness :: Atom modes polarity terms -> Body bodyVars
                  -> Maybe (Subseteq (ModedVars terms modes) bodyVars :~: 'True)
-decWellModedness (Atom (Predicate _ sModes) sTerms) body =
+decWellModedness (Atom (Predicate _ sModes) _ sTerms) body =
   case sSubseteq (sModedVars sTerms sModes) (sBodyVars body) of
     STrue  -> Just Refl
     SFalse -> Nothing
 
-decPureAtom :: Atom modes terms -> Maybe (IsPure modes :~: 'True)
-decPureAtom (Atom (Predicate _ sModes) _) =
+decPureAtom :: Atom modes polarity terms -> Maybe (IsPure modes :~: 'True)
+decPureAtom (Atom (Predicate _ sModes) _ _) =
   case sIsPure sModes of
     STrue  -> Just Refl
     SFalse -> Nothing
@@ -278,7 +287,7 @@ mkClause  someHead bodyAtoms = do
 
 mkBody :: [ SomeAtom ] -> Either String SomeBody
 mkBody [] = Right $ SB BEmpty
-mkBody (SA atom@(Atom _ terms) : atoms) = do
+mkBody (SA atom@(Atom _ _ terms) : atoms) = do
   SB body <- mkBody atoms
   let aVars = sKeepVars terms
   let bVars = sBodyVars body
@@ -289,10 +298,11 @@ mkBody (SA atom@(Atom _ terms) : atoms) = do
     Nothing -> Left "Clause is not well-moded."
 
 mkHead :: SomeAtom -> Either String SomeHead
-mkHead (SA atom) =
+mkHead (SA (Atom _ SNegative _)) = Left "Head atoms need to be positive."
+mkHead (SA atom@(Atom _ SPositive _)) =
   case decPureAtom atom of
     Just prf -> pure $ SH (Head atom prf)
-    Nothing   -> Left "Atom does "
+    Nothing   -> Left "Head atoms need to be have all free modes."
 
 -- Examples
 
@@ -305,16 +315,16 @@ easy :: Predicate '[ 'DontCare ]
 easy = Predicate "easy" (SDontCare `SCons` SNil)
 
 someEasy :: SomeAtom
-someEasy = SA $ Atom easy (STVar (SVar (sing @"X")) `SCons` SNil)
+someEasy = SA $ Atom easy SPositive (STVar (SVar (sing @"X")) `SCons` SNil)
 
-groundP :: Atom PMode '[ 'TLit ('Lit "42"), 'TVar ('Var "X") ]
-groundP = Atom p (STLit (SLit (sing @"42")) `SCons` STVar (SVar (sing @"X")) `SCons` SNil)
+groundP :: Atom PMode 'Positive '[ 'TLit ('Lit "42"), 'TVar ('Var "X") ]
+groundP = Atom p sing (STLit (SLit (sing @"42")) `SCons` STVar (SVar (sing @"X")) `SCons` SNil)
 
 someGroundP :: SomeAtom
 someGroundP = SA groundP
 
-modedP :: Atom PMode '[ 'TVar ('Var "X"), 'TVar ('Var "Y") ]
-modedP = Atom p (STVar (SVar (sing @"X")) `SCons` STVar (SVar (sing @"Y")) `SCons` SNil)
+modedP :: Atom PMode 'Positive '[ 'TVar ('Var "X"), 'TVar ('Var "Y") ]
+modedP = Atom p sing (STVar (SVar (sing @"X")) `SCons` STVar (SVar (sing @"Y")) `SCons` SNil)
 
 someModedP :: SomeAtom
 someModedP = SA modedP

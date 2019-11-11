@@ -78,8 +78,9 @@ $(singletonsOnly [d|
 
 -- Substitute into atoms
 
-substAtom :: Atom modes terms -> Unifier substs -> Atom modes (SubstTerms terms substs)
-substAtom (Atom predicate terms) unifier = Atom predicate $ sSubstTerms terms unifier
+substAtom :: Atom modes polarity terms -> Unifier substs
+          -> Atom modes polarity (SubstTerms terms substs)
+substAtom (Atom predicate polarity terms) unifier = Atom predicate polarity $ sSubstTerms terms unifier
 
 -- Unification
 
@@ -116,8 +117,8 @@ sUnifyTerms _ _ _ = Nothing
 absurdList :: (x ': xs) :~: '[] -> Void
 absurdList _ = error "Inaccessible"
 
-unify :: Atom modes terms -> Tuple -> Maybe (SomeUnifier (KeepVars terms))
-unify (Atom pred sTerms) (Tuple (Atom pred' sTerms') prf) = do
+unify :: Atom modes polarity terms -> Tuple -> Maybe (SomeUnifier (KeepVars terms))
+unify (Atom pred _ sTerms) (Tuple (Atom pred' SPositive sTerms') prf) = do
  Refl <- pred `testEquality` pred'
  sUnifyTerms sTerms sTerms' prf
 

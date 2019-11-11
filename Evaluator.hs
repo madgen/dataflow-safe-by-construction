@@ -22,7 +22,7 @@ import Unification
 
 type Solution = S.Set Tuple
 
-findUnifiers :: Atom modes terms -> Solution -> S.Set (SomeUnifier (KeepVars terms))
+findUnifiers :: Atom modes polarity terms -> Solution -> S.Set (SomeUnifier (KeepVars terms))
 findUnifiers atom solution = catMaybes $ S.map (unify atom) solution
   where
   catMaybes :: S.Set (Maybe (SomeUnifier vars)) -> S.Set (SomeUnifier vars)
@@ -36,7 +36,7 @@ step solution (Clause head clauseBody rangeRestriction) =
   where
   walkBody :: Body vars -> S.Set (SomeUnifier vars)
   walkBody BEmpty = S.singleton (SU SNil Refl)
-  walkBody (BSnoc body atom@(Atom _ terms) _ _) = S.unions $
+  walkBody (BSnoc body atom@(Atom _ _ terms) _ _) = S.unions $
     (`S.map` walkBody body) $ \(SU unifier Refl) ->
       (`S.map` findUnifiers (substAtom atom unifier) solution) $ \(SU extension Refl) ->
         case sym $ lemConcatHomo (Sing @_ @SubstVarSym0) extension unifier of
@@ -46,7 +46,7 @@ step solution (Clause head clauseBody rangeRestriction) =
 deriveHead :: Head terms -> Unifier substs
            -> Subseteq (KeepVars terms) (Map SubstVarSym0 substs) :~: 'True
            -> Tuple
-deriveHead (Head atom@(Atom _ terms) _) unifier subseteq =
+deriveHead (Head atom@(Atom _ _ terms) _) unifier subseteq =
   case substAtom atom unifier of
     head' -> Tuple head' (lemCompleteSubst terms unifier subseteq)
 
@@ -70,15 +70,22 @@ ancestorP, parentP :: Predicate Pure2
 ancestorP = Predicate "ancestor" sing
 parentP   = Predicate "parent" sing
 
-atom2Gen :: Predicate Pure2 -> STerm term -> STerm term' -> Atom Pure2 '[term, term']
-atom2Gen pred t1 t2 = Atom pred (t1 `SCons` t2 `SCons` SNil)
+atom2Gen :: Predicate Pure2
+         -> SPolarity polarity
+         -> STerm term -> STerm term'
+         -> Atom Pure2 polarity '[term, term']
+atom2Gen pred polarity t1 t2 = Atom pred polarity (t1 `SCons` t2 `SCons` SNil)
 
-ancestorA, parentA :: STerm term -> STerm term' -> Atom Pure2 '[term, term']
+ancestorA, parentA :: SPolarity polarity
+                   -> STerm term -> STerm term'
+                   -> Atom Pure2 polarity '[term, term']
 ancestorA = atom2Gen ancestorP
 parentA   = atom2Gen parentP
 
 tuple2Gen :: Predicate Pure2 -> SSymbol sym1 -> SSymbol sym2 -> Tuple
-tuple2Gen pred s1 s2 = Tuple (Atom pred (STLit (SLit s1) `SCons` STLit (SLit s2) `SCons` SNil)) Refl
+tuple2Gen pred s1 s2 = Tuple
+  (Atom pred SPositive (STLit (SLit s1) `SCons` STLit (SLit s2) `SCons` SNil))
+  Refl
 
 ancestorT, parentT :: SSymbol sym1 -> SSymbol sym2 -> Tuple
 ancestorT = tuple2Gen ancestorP
@@ -91,11 +98,11 @@ ancestorProgram =
     Left err -> error err
   where
   clauseCandidates =
-    [ ( SA $ ancestorA (STVar (SVar $ sing @"X")) (STVar (SVar $ sing @"Y"))
-      , [ SA $ parentA (STVar (SVar $ sing @"X")) (STVar (SVar $ sing @"Y")) ])
-    , ( SA $ ancestorA (STVar (SVar $ sing @"X")) (STVar (SVar $ sing @"Y"))
-      , [ SA $ ancestorA (STVar (SVar $ sing @"X")) (STVar (SVar $ sing @"T"))
-        , SA $ ancestorA (STVar (SVar $ sing @"T")) (STVar (SVar $ sing @"Y"))
+    [ ( SA $ ancestorA SPositive (STVar (SVar $ sing @"X")) (STVar (SVar $ sing @"Y"))
+      , [ SA $ parentA SPositive (STVar (SVar $ sing @"X")) (STVar (SVar $ sing @"Y")) ])
+    , ( SA $ ancestorA SPositive (STVar (SVar $ sing @"X")) (STVar (SVar $ sing @"Y"))
+      , [ SA $ ancestorA SPositive (STVar (SVar $ sing @"X")) (STVar (SVar $ sing @"T"))
+        , SA $ ancestorA SPositive (STVar (SVar $ sing @"T")) (STVar (SVar $ sing @"Y"))
         ])
     ]
 
