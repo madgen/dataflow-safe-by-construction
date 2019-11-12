@@ -88,11 +88,21 @@ lemNegVars terms modes unifier prf =
 
 -- Tests
 
+type Pure1 = '[ 'DontCare ]
 type Pure2 = '[ 'DontCare, 'DontCare ]
 
 ancestorP, parentP :: Predicate Pure2
-ancestorP = Predicate "ancestor" sing
-parentP   = Predicate "parent" sing
+ancestorP      = Predicate "ancestor" sing
+parentP        = Predicate "parent" sing
+
+nonHulusiDescP :: Predicate Pure1
+nonHulusiDescP = Predicate "nonHulusiDescP" sing
+
+atom1Gen :: Predicate Pure1
+         -> SPolarity polarity
+         -> STerm term
+         -> Atom Pure1 polarity '[term]
+atom1Gen pred polarity t1 = Atom pred polarity (t1 `SCons` SNil)
 
 atom2Gen :: Predicate Pure2
          -> SPolarity polarity
@@ -100,11 +110,19 @@ atom2Gen :: Predicate Pure2
          -> Atom Pure2 polarity '[term, term']
 atom2Gen pred polarity t1 t2 = Atom pred polarity (t1 `SCons` t2 `SCons` SNil)
 
-ancestorA, parentA :: SPolarity polarity
-                   -> STerm term -> STerm term'
-                   -> Atom Pure2 polarity '[term, term']
-ancestorA = atom2Gen ancestorP
-parentA   = atom2Gen parentP
+ancestorA, parentA
+  :: SPolarity polarity
+  -> STerm term -> STerm term'
+  -> Atom Pure2 polarity '[term, term']
+ancestorA     = atom2Gen ancestorP
+parentA       = atom2Gen parentP
+
+nonHulusiDescA :: SPolarity polarity -> STerm term -> Atom Pure1 polarity '[term]
+nonHulusiDescA = atom1Gen nonHulusiDescP
+
+tuple1Gen :: Predicate Pure1 -> SSymbol sym -> Tuple
+tuple1Gen pred s =
+  Tuple (Atom pred SPositive (STLit (SLit s) `SCons` SNil)) Refl
 
 tuple2Gen :: Predicate Pure2 -> SSymbol sym1 -> SSymbol sym2 -> Tuple
 tuple2Gen pred s1 s2 = Tuple
@@ -112,8 +130,11 @@ tuple2Gen pred s1 s2 = Tuple
   Refl
 
 ancestorT, parentT :: SSymbol sym1 -> SSymbol sym2 -> Tuple
-ancestorT = tuple2Gen ancestorP
-parentT   = tuple2Gen parentP
+ancestorT      = tuple2Gen ancestorP
+parentT        = tuple2Gen parentP
+
+nonHulusiDescT :: SSymbol sym1 -> Tuple
+nonHulusiDescT = tuple1Gen nonHulusiDescP
 
 ancestorProgram :: Program
 ancestorProgram =
@@ -140,8 +161,8 @@ input = S.fromList
   , parentT (sing @"Orhan") (sing @"Nilufer")
   ]
 
-expected :: Solution
-expected = input <> S.fromList
+ancestorExpected :: Solution
+ancestorExpected = input <> S.fromList
   [ ancestorT (sing @"Nilufer") (sing @"Mistral")
   , ancestorT (sing @"Laurent") (sing @"Mistral")
   , ancestorT (sing @"Hulusi") (sing @"Emir")
@@ -152,12 +173,42 @@ expected = input <> S.fromList
   , ancestorT (sing @"Orhan") (sing @"Mistral")
   ]
 
+reflexiveProgram :: Program
+reflexiveProgram = ancestorProgram ++
+  case traverse (uncurry mkClause) clauseCandidates of
+    Right clauses -> clauses
+    Left err -> error err
+  where
+  clauseCandidates =
+    [ ( SA $ nonHulusiDescA SPositive (STVar (SVar $ sing @"X"))
+      , [ SA $ ancestorA SPositive (STVar (SVar $ sing @"T")) (STVar (SVar $ sing @"X"))
+        , SA $ ancestorA SNegative (STLit (SLit $ sing @"Hulusi")) (STVar (SVar $ sing @"X"))
+        ])
+    ]
+
+nonHulusiDescExpected :: Solution
+nonHulusiDescExpected = ancestorExpected <> S.fromList
+  [ nonHulusiDescT (sing @"Nilufer")
+  , nonHulusiDescT (sing @"Hulusi")
+  , nonHulusiDescT (sing @"Mistral")
+  ]
+
 ancestorTest :: IO ()
 ancestorTest =
-  if output == expected
+  if output == ancestorExpected
     then putStrLn "Ancestor runs successfully"
     else do
       putStrLn "Ancestor program failed. Here's the output: "
       print output
   where
   output = evaluator ancestorProgram input
+
+nonHulusiDescTest :: IO ()
+nonHulusiDescTest =
+  if output == nonHulusiDescExpected
+    then putStrLn "Non-Hulusi descendant runs successfully"
+    else do
+      putStrLn "Non-Hulusi descendant failed. Here's the output: "
+      print output
+  where
+  output = evaluator reflexiveProgram input
