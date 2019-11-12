@@ -3,7 +3,6 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ExistentialQuantification #-}
 
 module Evaluator where
@@ -22,12 +21,27 @@ import Unification
 
 type Solution = S.Set Tuple
 
-findUnifiers :: Atom modes polarity terms -> Solution -> S.Set (SomeUnifier (KeepVars terms))
-findUnifiers atom solution = catMaybes $ S.map (unify atom) solution
+findUnifiers :: Solution -> Atom modes 'Positive terms -> S.Set (SomeUnifier (KeepVars terms))
+findUnifiers solution atom = catMaybes $ S.map (unify atom) solution
   where
   catMaybes :: S.Set (Maybe (SomeUnifier vars)) -> S.Set (SomeUnifier vars)
   catMaybes f = foldr `flip` mempty `flip` f
               $ \mEl acc -> maybe acc (`S.insert` acc) mEl
+
+eval :: Solution
+     -> Atom modes polarity terms
+     -> Unifier substs
+     -> Subseteq (ModedVars polarity terms modes) (Map SubstVarSym0 substs) :~: 'True
+     -> S.Set (SomeUnifier (KeepVars (SubstTerms terms substs)))
+eval solution atom@(Atom pred@(Predicate _ modes) polarity terms) unifier prf =
+  case polarity of
+    SPositive -> findUnifiers solution atom'
+    SNegative | Refl <- lemNegVars terms modes unifier prf ->
+      if S.null (findUnifiers solution (Atom pred SPositive terms'))
+        then S.singleton (SU SNil Refl)
+        else S.empty
+  where
+  atom'@(Atom _ _ terms') = substAtom atom unifier
 
 step :: Solution -> Clause -> Solution
 step solution (Clause head clauseBody rangeRestriction) =
@@ -36,12 +50,12 @@ step solution (Clause head clauseBody rangeRestriction) =
   where
   walkBody :: Body vars -> S.Set (SomeUnifier vars)
   walkBody BEmpty = S.singleton (SU SNil Refl)
-  walkBody (BSnoc body atom@(Atom _ _ terms) _ _) = S.unions $
+  walkBody (BSnoc body atom@(Atom _ _ terms) prf _) = S.unions $
     (`S.map` walkBody body) $ \(SU unifier Refl) ->
-      (`S.map` findUnifiers (substAtom atom unifier) solution) $ \(SU extension Refl) ->
+      (`S.map` eval solution atom unifier prf) $ \(SU extension Refl) ->
         case sym $ lemConcatHomo (Sing @_ @SubstVarSym0) extension unifier of
-          Refl -> case lemSubstOnVars terms unifier of
-            Refl -> SU (extension %++ unifier) Refl
+          Refl | Refl <- lemSubstOnVars terms unifier ->
+            SU (extension %++ unifier) Refl
 
 deriveHead :: Head terms -> Unifier substs
            -> Subseteq (KeepVars terms) (Map SubstVarSym0 substs) :~: 'True
@@ -61,6 +75,16 @@ evaluator program solution =
     else evaluator program newSolution
   where
   newSolution = round program solution
+
+-- Properties
+
+lemNegVars :: polarity ~ 'Negative
+            => STerms terms -> SList modes -> Unifier substs
+            -> Subseteq (ModedVars polarity terms modes) (Map SubstVarSym0 substs) :~: 'True
+            -> KeepVars (SubstTerms terms substs) :~: '[]
+lemNegVars terms modes unifier prf =
+  case lemModedVarCorresp terms modes of
+    Refl -> lemCompleteSubst terms unifier prf
 
 -- Tests
 

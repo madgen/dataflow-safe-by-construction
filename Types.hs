@@ -161,8 +161,8 @@ $(singletons [d|
   modedVars _ [] [] = []
   modedVars Positive (TVar var : ts) (Plus     : ms) = var : modedVars Positive ts ms
   modedVars Positive (TVar{}   : ts) (DontCare : ms) =       modedVars Positive ts ms
-  modedVars Negative (TVar var : ts) (_        : ms) = var : modedVars Positive ts ms
-  modedVars _        (TLit{}   : ts) (_        : ms) =       modedVars Positive ts ms
+  modedVars Negative (TVar var : ts) (_        : ms) = var : modedVars Negative ts ms
+  modedVars polarity (TLit{}   : ts) (_        : ms) =       modedVars polarity ts ms
   modedVars _ _ _ = error "Uneven number of terms and modes"
   |])
 
@@ -304,6 +304,14 @@ mkHead (SA atom@(Atom _ SPositive _)) =
   case decPureAtom atom of
     Just prf -> pure $ SH (Head atom prf)
     Nothing   -> Left "Head atoms need to be have all free modes."
+
+-- Properties
+
+lemModedVarCorresp :: SList terms -> SList modes -> ModedVars 'Negative terms modes :~: KeepVars terms
+lemModedVarCorresp SNil SNil = Refl
+lemModedVarCorresp (STLit{} `SCons` ts) (_ `SCons` ms) = lemModedVarCorresp ts ms
+lemModedVarCorresp (STVar{} `SCons` ts) (_ `SCons` ms) | Refl <- lemModedVarCorresp ts ms = Refl
+lemModedVarCorresp _ _ = error "Uneven number of terms and modes"
 
 -- Examples
 
